@@ -636,17 +636,21 @@ async function doLogin() {
     msg.className = 'auth-msg error'; msg.textContent = 'Please enter your email and password.'; return;
   }
 
-  // captcha on login form — verify it's checked but don't send token to signIn
-  // (Supabase signInWithPassword does not accept captchaToken)
-  const captchaToken = window.hcaptcha && loginCaptchaId !== null ? window.hcaptcha.getResponse(loginCaptchaId) : 'skip';
-  if (!captchaToken) {
-    msg.className = 'auth-msg error'; msg.textContent = 'Please complete the captcha check first.'; return;
+  // check captcha only if it was successfully rendered
+  if (loginCaptchaId !== null && window.hcaptcha) {
+    const token = window.hcaptcha.getResponse(loginCaptchaId);
+    if (!token) {
+      msg.className = 'auth-msg error'; msg.textContent = 'Please complete the captcha check first.'; return;
+    }
   }
 
   btn.innerHTML = '<span class="spinner"></span>Signing in...'; btn.disabled = true;
   const { error } = await sbClient.auth.signInWithPassword({ email, password: pass });
   btn.innerHTML = 'Sign in'; btn.disabled = false;
+
+  // reset captcha after every attempt so it's fresh for next time
   if (window.hcaptcha && loginCaptchaId !== null) window.hcaptcha.reset(loginCaptchaId);
+
   if (error) { msg.className = 'auth-msg error'; msg.textContent = error.message; }
 }
 
