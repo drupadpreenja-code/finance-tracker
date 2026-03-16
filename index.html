@@ -679,17 +679,21 @@ async function doLogin() {
   const btn   = document.getElementById('login-btn');
   msg.className = 'auth-msg'; msg.style.display = 'none';
 
-  // get captcha token
-  const captchaEl = document.querySelector('#login-captcha iframe');
-  const captchaToken = window.hcaptcha ? window.hcaptcha.getResponse(loginCaptchaId) : null;
+  if (!email || !pass) {
+    msg.className = 'auth-msg error'; msg.textContent = 'Please enter your email and password.'; return;
+  }
+
+  // captcha on login form — verify it's checked but don't send token to signIn
+  // (Supabase signInWithPassword does not accept captchaToken)
+  const captchaToken = window.hcaptcha && loginCaptchaId !== null ? window.hcaptcha.getResponse(loginCaptchaId) : 'skip';
   if (!captchaToken) {
-    msg.className = 'auth-msg error'; msg.textContent = 'Please complete the captcha verification.'; return;
+    msg.className = 'auth-msg error'; msg.textContent = 'Please complete the captcha check first.'; return;
   }
 
   btn.innerHTML = '<span class="spinner"></span>Signing in...'; btn.disabled = true;
-  const { error } = await sbClient.auth.signInWithPassword({ email, password: pass, options: { captchaToken } });
+  const { error } = await sbClient.auth.signInWithPassword({ email, password: pass });
   btn.innerHTML = 'Sign in'; btn.disabled = false;
-  if (window.hcaptcha) window.hcaptcha.reset(loginCaptchaId);
+  if (window.hcaptcha && loginCaptchaId !== null) window.hcaptcha.reset(loginCaptchaId);
   if (error) { msg.className = 'auth-msg error'; msg.textContent = error.message; }
 }
 
@@ -702,19 +706,22 @@ async function doSignup() {
   if (!name || !email || !pass) { msg.className='auth-msg error'; msg.textContent='Please fill all fields.'; return; }
   if (pass.length < 6) { msg.className='auth-msg error'; msg.textContent='Password must be at least 6 characters.'; return; }
 
-  // get captcha token
-  const captchaToken = window.hcaptcha ? window.hcaptcha.getResponse(signupCaptchaId) : null;
-  if (!captchaToken) { msg.className='auth-msg error'; msg.textContent='Please complete the captcha verification.'; return; }
+  // get captcha token — only enforce if captcha successfully rendered
+  const captchaToken = window.hcaptcha && signupCaptchaId !== null ? window.hcaptcha.getResponse(signupCaptchaId) : null;
+  if (signupCaptchaId !== null && !captchaToken) {
+    msg.className='auth-msg error'; msg.textContent='Please complete the captcha check first.'; return;
+  }
 
   btn.innerHTML = '<span class="spinner"></span>Creating account...'; btn.disabled = true;
-  const { error } = await sbClient.auth.signUp({ email, password: pass, options: { captchaToken, data: { full_name: name, role: 'member' } } });
+  const signUpOptions = { data: { full_name: name, role: 'member' } };
+  if (captchaToken) signUpOptions.captchaToken = captchaToken;
+  const { error } = await sbClient.auth.signUp({ email, password: pass, options: signUpOptions });
   btn.innerHTML = 'Create account'; btn.disabled = false;
-  if (window.hcaptcha) window.hcaptcha.reset(signupCaptchaId);
+  if (window.hcaptcha && signupCaptchaId !== null) window.hcaptcha.reset(signupCaptchaId);
   if (error) { msg.className='auth-msg error'; msg.textContent=error.message; }
   else {
     msg.className='auth-msg success';
     msg.textContent='Account created successfully! You can now sign in with your email and password.';
-    // auto-switch to login tab after 2s
     setTimeout(() => {
       switchTab('login');
       document.getElementById('login-email').value = email;
