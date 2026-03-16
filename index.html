@@ -200,46 +200,15 @@ tr:hover td{background:var(--bg2)}
 <body>
 <div id="toast"></div>
 
-<!-- ══════════════════════ SETUP CONFIG SCREEN ══════════════════════ -->
+<!-- ══════════════════════ SETUP CONFIG SCREEN (owner only, hidden after first setup) ══════════════════════ -->
 <div id="config-screen" style="display:none;min-height:100vh;align-items:center;justify-content:center;padding:24px">
   <div class="auth-card" style="max-width:520px">
     <div class="auth-logo">
       <div class="auth-logo-icon">₹</div>
       <span class="auth-logo-text">FinanceTracker</span>
     </div>
-    <h2 class="auth-title">One-time setup</h2>
-    <p class="auth-sub">Connect your Supabase project and hCaptcha. Saved locally, never shared.</p>
-
-    <div class="setup-banner">
-      <strong>Step 1 — Supabase (database &amp; auth)</strong><br>
-      1. Go to <a href="https://supabase.com" target="_blank" style="color:var(--amber-txt)">supabase.com</a> → New project (free)<br>
-      2. Go to <strong>Project Settings → API</strong><br>
-      3. Copy your <code>Project URL</code> and <code>anon public</code> key below<br>
-      4. Run the SQL setup script shown after you connect
-    </div>
-    <div class="form-group">
-      <label>Supabase Project URL</label>
-      <input type="text" id="cfg-url" placeholder="https://xyzxyz.supabase.co">
-    </div>
-    <div class="form-group">
-      <label>Supabase Anon Key</label>
-      <input type="password" id="cfg-key" placeholder="eyJhbGciOiJIUzI1NiIs...">
-    </div>
-
-    <div class="setup-banner" style="margin-top:16px">
-      <strong>Step 2 — hCaptcha (bot protection)</strong><br>
-      1. Go to <a href="https://www.hcaptcha.com" target="_blank" style="color:var(--amber-txt)">hcaptcha.com</a> → Sign up free → Add site<br>
-      2. Copy your <code>Site Key</code> below<br>
-      3. Copy your <code>Secret Key</code> → paste in Supabase <strong>Auth → Settings → Enable hCaptcha</strong><br>
-      <span style="opacity:.75">Skip this step to use the test key (no real bot protection).</span>
-    </div>
-    <div class="form-group">
-      <label>hCaptcha Site Key</label>
-      <input type="text" id="cfg-captcha" placeholder="Leave blank to use test key (recommended for family use)">
-    </div>
-
-    <div id="cfg-msg" class="auth-msg"></div>
-    <button class="btn btn-primary btn-full" onclick="saveConfig()">Connect & Continue</button>
+    <h2 class="auth-title">Configuration missing</h2>
+    <p class="auth-sub" style="color:var(--red-txt)">The app credentials are not configured. Please contact the app owner to update the HTML file with the correct Supabase and hCaptcha keys.</p>
   </div>
 </div>
 
@@ -489,11 +458,38 @@ tr:hover td{background:var(--bg2)}
 
 <script>
 // ══════════════════════════════════════════════════════════
-//  CONFIG & SUPABASE INIT
+//  OWNER: Fill in only these two lines — they are public by design
+//  (Supabase anon key is safe to expose — RLS protects the data)
 // ══════════════════════════════════════════════════════════
+const APP_SUPABASE_URL = 'https://wrfklddhrtotzremoepp.supabase.co';      // e.g. https://xyzxyz.supabase.co
+const APP_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndyZmtsZGRocnRvdHpyZW1vZXBwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM2MzkyNTcsImV4cCI6MjA4OTIxNTI1N30.VYDuJ8kutM1H2DPUE0oO7pI7VTWPLaVTv0ncDxJ4V3s'; // eyJhbGci...
+// ══════════════════════════════════════════════════════════
+// All other config (hCaptcha sitekey etc.) is stored in the
+// app_config table in your Supabase database — edit it there.
+// ══════════════════════════════════════════════════════════
+
+let appConfig = {}; // loaded from DB on boot
 
 const SUPABASE_SQL = `
 -- Run this ONCE in Supabase SQL Editor
+
+-- App config table (stores hCaptcha sitekey and future settings)
+create table if not exists public.app_config (
+  key text primary key,
+  value text not null,
+  updated_at timestamptz default now()
+);
+-- Allow anyone (even unauthenticated) to READ config — needed before login
+alter table public.app_config enable row level security;
+create policy "app_config: public read" on public.app_config
+  for select using (true);
+create policy "app_config: no public write" on public.app_config
+  for all using (false);
+
+-- Insert default hCaptcha sitekey (test key — replace with your real one in Table Editor)
+insert into public.app_config (key, value)
+values ('hcaptcha_sitekey', '10000000-ffff-ffff-ffff-000000000001')
+on conflict (key) do nothing;
 
 -- Profiles table (extends auth.users)
 create table if not exists public.profiles (
@@ -576,12 +572,10 @@ window.addEventListener('load', boot);
 
 function initCaptchas() {
   if (!window.hcaptcha) { setTimeout(initCaptchas, 300); return; }
-  const sitekey = localStorage.getItem('hcaptcha_sitekey') || '10000000-ffff-ffff-ffff-000000000001';
+  const sitekey = appConfig.hcaptcha_sitekey || '10000000-ffff-ffff-ffff-000000000001';
   try {
-    // reset any existing widgets so they re-render with the correct sitekey
     if (loginCaptchaId !== null)  { window.hcaptcha.reset(loginCaptchaId);  loginCaptchaId  = null; }
     if (signupCaptchaId !== null) { window.hcaptcha.reset(signupCaptchaId); signupCaptchaId = null; }
-    // clear inner HTML so hcaptcha renders fresh
     document.getElementById('login-captcha').innerHTML  = '';
     document.getElementById('signup-captcha').innerHTML = '';
     loginCaptchaId  = window.hcaptcha.render('login-captcha',  { sitekey });
@@ -590,25 +584,31 @@ function initCaptchas() {
 }
 
 async function boot() {
-  const url = localStorage.getItem('sb_url');
-  const key = localStorage.getItem('sb_key');
-  // pre-fill config fields in case user needs to edit
-  if (url) document.getElementById('cfg-url').value = url;
-  const existingSitekey = localStorage.getItem('hcaptcha_sitekey');
-  if (existingSitekey && existingSitekey !== '10000000-ffff-ffff-ffff-000000000001') {
-    document.getElementById('cfg-captcha').value = existingSitekey;
+  const url = APP_SUPABASE_URL;
+  const key = APP_SUPABASE_KEY;
+
+  if (!url || url.includes('PASTE_YOUR') || !key || key.includes('PASTE_YOUR')) {
+    showScreen('config'); return;
   }
-  if (!url || !key) { showScreen('config'); return; }
+
   try {
     sbClient = window.supabase.createClient(url, key);
+
+    // fetch app config from DB (publicly readable, no auth needed)
+    const { data: configRows } = await sbClient.from('app_config').select('key, value');
+    if (configRows) {
+      configRows.forEach(row => { appConfig[row.key] = row.value; });
+    }
+
     const { data: { session } } = await sbClient.auth.getSession();
     if (session) { await onLogin(session.user); }
     else { showScreen('auth'); }
+
     sbClient.auth.onAuthStateChange(async (event, session) => {
       if (event === 'SIGNED_IN' && session) await onLogin(session.user);
       if (event === 'SIGNED_OUT') { currentUser = null; showScreen('auth'); }
     });
-  } catch(e) { showScreen('config'); }
+  } catch(e) { console.error(e); showScreen('config'); }
 }
 
 function showScreen(name) {
@@ -616,50 +616,6 @@ function showScreen(name) {
   document.getElementById('auth-screen').style.display   = name === 'auth'   ? 'flex' : 'none';
   document.getElementById('app-screen').style.display    = name === 'app'    ? 'block' : 'none';
   if (name === 'auth') initCaptchas();
-}
-
-// ── CONFIG ──
-function saveConfig() {
-  const url     = document.getElementById('cfg-url').value.trim();
-  const key     = document.getElementById('cfg-key').value.trim();
-  const captcha = document.getElementById('cfg-captcha').value.trim();
-  const msg     = document.getElementById('cfg-msg');
-  if (!url.startsWith('https://') || !key.startsWith('eyJ')) {
-    msg.className = 'auth-msg error'; msg.textContent = 'Please enter a valid Supabase URL and anon key.'; return;
-  }
-  localStorage.setItem('sb_url', url);
-  localStorage.setItem('sb_key', key);
-  // use provided sitekey or fall back to hCaptcha test key
-  localStorage.setItem('hcaptcha_sitekey', captcha || '10000000-ffff-ffff-ffff-000000000001');
-  showSqlModal();
-}
-
-function showSqlModal() {
-  document.getElementById('sql-content').value = SUPABASE_SQL;
-  const m = document.getElementById('sql-modal');
-  m.style.display = 'flex';
-}
-function closeSqlModal() {
-  document.getElementById('sql-modal').style.display = 'none';
-  boot();
-}
-function copySql() {
-  navigator.clipboard.writeText(SUPABASE_SQL).then(() => toast('SQL copied!'));
-}
-function resetConfig() {
-  localStorage.removeItem('sb_url');
-  localStorage.removeItem('sb_key');
-  localStorage.removeItem('hcaptcha_sitekey');
-  loginCaptchaId = null;
-  signupCaptchaId = null;
-  showScreen('config');
-  // pre-fill existing values for easy editing
-  setTimeout(() => {
-    const existingCaptcha = localStorage.getItem('hcaptcha_sitekey');
-    if (existingCaptcha && existingCaptcha !== '10000000-ffff-ffff-ffff-000000000001') {
-      document.getElementById('cfg-captcha').value = existingCaptcha;
-    }
-  }, 50);
 }
 
 // ── AUTH UI ──
