@@ -262,7 +262,7 @@ tr:hover td{background:var(--bg2)}
       <div id="login-msg" class="auth-msg"></div>
       <div class="form-group"><label>Email</label><input type="email" id="login-email" placeholder="you@email.com"></div>
       <div class="form-group"><label>Password</label><input type="password" id="login-password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
-      <div class="captcha-wrap"><div class="h-captcha" data-sitekey="10000000-ffff-ffff-ffff-000000000001" id="login-captcha"></div></div>
+      <div class="captcha-wrap"><div id="login-captcha"></div></div>
       <div class="captcha-note">Protected by hCaptcha</div>
       <button class="btn btn-primary btn-full" id="login-btn" onclick="doLogin()">Sign in</button>
       <div style="margin-top:12px;text-align:center"><button class="btn btn-sm" style="color:var(--txt2);border:none" onclick="doForgotPassword()">Forgot password?</button></div>
@@ -276,7 +276,7 @@ tr:hover td{background:var(--bg2)}
       <div class="form-group"><label>Full name</label><input type="text" id="signup-name" placeholder="Rahul Sharma"></div>
       <div class="form-group"><label>Email</label><input type="email" id="signup-email" placeholder="you@email.com"></div>
       <div class="form-group"><label>Password</label><input type="password" id="signup-password" placeholder="Min. 6 characters" onkeydown="if(event.key==='Enter')doSignup()"></div>
-      <div class="captcha-wrap"><div class="h-captcha" data-sitekey="10000000-ffff-ffff-ffff-000000000001" id="signup-captcha"></div></div>
+      <div class="captcha-wrap"><div id="signup-captcha"></div></div>
       <div class="captcha-note">Protected by hCaptcha</div>
       <button class="btn btn-primary btn-full" id="signup-btn" onclick="doSignup()">Create account</button>
     </div>
@@ -581,9 +581,15 @@ function initCaptchas() {
   if (!window.hcaptcha) { setTimeout(initCaptchas, 300); return; }
   const sitekey = localStorage.getItem('hcaptcha_sitekey') || '10000000-ffff-ffff-ffff-000000000001';
   try {
-    if (loginCaptchaId === null)  loginCaptchaId  = window.hcaptcha.render('login-captcha',  { sitekey });
-    if (signupCaptchaId === null) signupCaptchaId = window.hcaptcha.render('signup-captcha', { sitekey });
-  } catch(e) { /* already rendered */ }
+    // reset any existing widgets so they re-render with the correct sitekey
+    if (loginCaptchaId !== null)  { window.hcaptcha.reset(loginCaptchaId);  loginCaptchaId  = null; }
+    if (signupCaptchaId !== null) { window.hcaptcha.reset(signupCaptchaId); signupCaptchaId = null; }
+    // clear inner HTML so hcaptcha renders fresh
+    document.getElementById('login-captcha').innerHTML  = '';
+    document.getElementById('signup-captcha').innerHTML = '';
+    loginCaptchaId  = window.hcaptcha.render('login-captcha',  { sitekey });
+    signupCaptchaId = window.hcaptcha.render('signup-captcha', { sitekey });
+  } catch(e) { console.warn('hCaptcha init error:', e); }
 }
 
 async function boot() {
