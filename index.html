@@ -591,15 +591,17 @@ async function boot() {
     showScreen('config'); return;
   }
 
+  // initialize client FIRST — before anything else
+  sbClient = window.supabase.createClient(url, key);
+
+  // fetch app config from DB — fail silently if table doesn't exist yet
   try {
-    sbClient = window.supabase.createClient(url, key);
-
-    // fetch app config from DB (publicly readable, no auth needed)
     const { data: configRows } = await sbClient.from('app_config').select('key, value');
-    if (configRows) {
-      configRows.forEach(row => { appConfig[row.key] = row.value; });
-    }
+    if (configRows) configRows.forEach(row => { appConfig[row.key] = row.value; });
+  } catch(e) { console.warn('app_config not available yet:', e); }
 
+  // now handle auth
+  try {
     const { data: { session } } = await sbClient.auth.getSession();
     if (session) { await onLogin(session.user); }
     else { showScreen('auth'); }
@@ -608,7 +610,7 @@ async function boot() {
       if (event === 'SIGNED_IN' && session) await onLogin(session.user);
       if (event === 'SIGNED_OUT') { currentUser = null; showScreen('auth'); }
     });
-  } catch(e) { console.error(e); showScreen('config'); }
+  } catch(e) { console.error('Auth error:', e); showScreen('auth'); }
 }
 
 function showScreen(name) {
