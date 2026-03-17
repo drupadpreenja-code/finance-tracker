@@ -39,13 +39,6 @@ const AVATAR_COLORS  = ['#185FA5','#1D9E75','#EF9F27','#7F77DD','#E24B4A','#D453
 //  BOOT
 // ══════════════════════════════════════════════════════════
 
-// ── DEBUG (remove after mobile issue is resolved) ──
-function dbg(msg) {
-  console.log('[FT]', msg);
-  const el = document.getElementById('debug-overlay');
-  if (el) { el.style.display = 'block'; el.innerHTML += msg + '\n'; }
-}
-
 window.addEventListener('load', boot);
 
 // ── LOADER HELPERS ──
@@ -127,7 +120,6 @@ async function boot() {
   try {
     const { data: { session } } = await sbClient.auth.getSession();
     hidePageLoader();
-    dbg('boot: session=' + (session ? 'YES user='+session.user.email : 'NO'));
 
     if (session) {
       await enterApp(session.user);
@@ -135,15 +127,12 @@ async function boot() {
       showScreen('auth');
     }
   } catch(e) {
-    dbg('boot error: ' + e.message);
     hidePageLoader();
     showScreen('auth');
   }
 
   sbClient.auth.onAuthStateChange(async (event, session) => {
-    dbg('authChange: event='+event+' currentUser='+(currentUser?'SET':'null'));
     if (event === 'SIGNED_IN' && session && !currentUser) {
-      dbg('authChange: calling enterApp for ' + session.user.email);
       await enterApp(session.user);
     }
     if (event === 'SIGNED_OUT') {
@@ -156,7 +145,6 @@ async function boot() {
 
 // Single entry point after any successful password auth
 async function enterApp(user) {
-  dbg('enterApp: ' + user.email);
 
   // Set currentUser immediately — this blocks any duplicate SIGNED_IN events
   // from onAuthStateChange (!currentUser guard) while we handle this flow
@@ -167,12 +155,10 @@ async function enterApp(user) {
     if (aalErr) throw aalErr;
 
     const { currentLevel, nextLevel } = aalData;
-    dbg('enterApp: aal current='+currentLevel+' next='+nextLevel);
 
     if (currentLevel === 'aal1' && nextLevel === 'aal2') {
       const { data: factorData } = await sbClient.auth.mfa.listFactors();
       const verified = factorData?.totp?.find(f => f.status === 'verified');
-      dbg('enterApp: MFA needed, factor=' + (verified ? verified.id : 'NONE'));
       if (verified) {
         mfaFactorId = verified.id;
         showScreen('mfa-verify');
@@ -181,10 +167,8 @@ async function enterApp(user) {
       }
     }
   } catch(e) {
-    dbg('enterApp: MFA check error=' + e.message);
   }
 
-  dbg('enterApp: going to app');
   await onLogin(user);
   showScreen('app');
   setTimeout(() => renderAll(), 50);
