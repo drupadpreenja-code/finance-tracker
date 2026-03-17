@@ -44,13 +44,47 @@ const AVATAR_COLORS  = ['#185FA5','#1D9E75','#EF9F27','#7F77DD','#E24B4A','#D453
 
 window.addEventListener('load', boot);
 
+// ── LOADER HELPERS ──
+function hidePageLoader() {
+  const el = document.getElementById('page-loader');
+  if (el) el.classList.add('hidden');
+}
+
+function showSectionLoader(id, show) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = show ? 'flex' : 'none';
+}
+
+function setBtn(id, loading, defaultText) {
+  const btn = document.getElementById(id);
+  if (!btn) return;
+  if (loading) {
+    btn.innerHTML = `<span class="spinner"></span>`;
+    btn.disabled = true;
+  } else {
+    btn.innerHTML = defaultText;
+    btn.disabled = false;
+  }
+}
+
+async function refreshData() {
+  const btn = document.getElementById('refresh-btn');
+  if (btn) { btn.innerHTML = '<span class="spinner spinner-dark"></span>'; btn.disabled = true; }
+  const ptr = document.getElementById('ptr-indicator');
+  if (ptr) ptr.classList.add('visible');
+  await loadData();
+  renderAll();
+  if (btn) { btn.innerHTML = '↻'; btn.disabled = false; }
+  if (ptr) ptr.classList.remove('visible');
+  toast('✓ Data refreshed');
+}
+
 function toggleTheme() {
   const html    = document.documentElement;
   const current = html.getAttribute('data-theme');
-  // detect effective current theme (manual or system)
   const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const isDark = current === 'dark' || (!current && systemDark);
-  const next = isDark ? 'light' : 'dark';
+  const isDark  = current === 'dark' || (!current && systemDark);
+  const next    = isDark ? 'light' : 'dark';
   html.setAttribute('data-theme', next);
   localStorage.setItem('ft_theme', next);
   updateThemeBtn(next);
@@ -64,13 +98,20 @@ function updateThemeBtn(theme) {
   btn.textContent = isDark ? '☀ Light' : '🌙 Dark';
 }
 
+// called once the app screen is visible so button exists in DOM
+function applyThemeToBtn() {
+  const saved = localStorage.getItem('ft_theme');
+  updateThemeBtn(saved);
+}
+
 async function boot() {
   // apply saved theme immediately before anything renders
   const savedTheme = localStorage.getItem('ft_theme');
   if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
   updateThemeBtn(savedTheme);
+
   if (!APP_SUPABASE_URL || APP_SUPABASE_URL.includes('PASTE_YOUR')) {
-    showScreen('config'); return;
+    hidePageLoader(); showScreen('config'); return;
   }
   sbClient = window.supabase.createClient(APP_SUPABASE_URL, APP_SUPABASE_KEY);
 
@@ -82,6 +123,7 @@ async function boot() {
 
   try {
     const { data: { session } } = await sbClient.auth.getSession();
+    hidePageLoader();
     if (session) await handleSession(session.user);
     else showScreen('auth');
 
@@ -89,7 +131,11 @@ async function boot() {
       if (event === 'SIGNED_IN'  && session) await handleSession(session.user);
       if (event === 'SIGNED_OUT')           { currentUser = null; showScreen('auth'); }
     });
-  } catch(e) { console.error(e); showScreen('auth'); }
+  } catch(e) {
+    console.error(e);
+    hidePageLoader();
+    showScreen('auth');
+  }
 }
 
 // ── After successful password auth — check if MFA is needed ──
@@ -140,7 +186,34 @@ function showPage(id, btn) {
   document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('page-' + id).classList.add('active');
   if (btn) btn.classList.add('active');
+  // sync bottom nav
+  syncBottomNav(id);
   renderAll();
+}
+
+function showPageMobile(id, btn) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.bottom-nav-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  if (btn) btn.classList.add('active');
+  // also highlight desktop nav
+  document.querySelectorAll('.nav-btn').forEach(b => {
+    if (b.getAttribute('onclick')?.includes("'"+id+"'")) b.classList.add('active');
+  });
+  renderAll();
+  // scroll to top on page change
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function syncBottomNav(id) {
+  const map = { dashboard:'bnav-dashboard', transactions:'bnav-transactions', investments:'bnav-investments', salary:'bnav-salary', family:'bnav-family', allocation:null };
+  document.querySelectorAll('.bottom-nav-btn').forEach(b => b.classList.remove('active'));
+  const btnId = map[id];
+  if (btnId) {
+    const el = document.getElementById(btnId);
+    if (el) el.classList.add('active');
+  }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -209,6 +282,8 @@ async function onLogin(user) {
   document.getElementById('inv-date').value = new Date().toISOString().slice(0,10);
   document.getElementById('share-link').value = window.location.href;
   await loadData();
+  // fix theme button label now that the button is in the DOM
+  setTimeout(applyThemeToBtn, 50);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -254,25 +329,104 @@ async function doMfaVerify() {
 //  MFA — SETUP (new users setting up MFA for the first time)
 // ══════════════════════════════════════════════════════════
 
-async function startMfaSetup() {
+async function startMfaSetup(inline = false) {
+  if (inline) {
+    // show inline modal inside the app — don't switch screens
+    showMfaModal();
+    return;
+  }
+  // full screen setup (called right after first login)
   showScreen('mfa-setup');
   document.getElementById('mfa-setup-msg').className = 'auth-msg';
   document.getElementById('mfa-setup-code').value = '';
+  await loadMfaQr('mfa-qr-code', 'mfa-secret-key', 'mfa-setup-msg');
+}
 
+async function showMfaModal() {
+  // create modal overlay if not already present
+  let modal = document.getElementById('mfa-inline-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'mfa-inline-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:500;display:flex;align-items:center;justify-content:center;padding:24px';
+    modal.innerHTML = `
+      <div style="background:var(--bg);border-radius:var(--rl);padding:32px;max-width:440px;width:100%;box-shadow:0 8px 40px rgba(0,0,0,.2);position:relative">
+        <button onclick="closeMfaModal()" style="position:absolute;top:14px;right:16px;background:none;border:none;cursor:pointer;font-size:18px;color:var(--txt2)">✕</button>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
+          <div style="width:32px;height:32px;background:var(--txt);border-radius:7px;display:flex;align-items:center;justify-content:center;color:var(--bg);font-size:14px;font-weight:700">₹</div>
+          <span style="font-size:16px;font-weight:700">Set up two-factor auth</span>
+        </div>
+        <p style="font-size:13px;color:var(--txt2);margin-bottom:16px">Scan this QR code with <strong>Google Authenticator</strong> or <strong>Authy</strong>, then enter the 6-digit code to activate.</p>
+        <div id="mfa-modal-msg" style="padding:10px 13px;border-radius:var(--r);font-size:13px;margin-bottom:12px;display:none"></div>
+        <div style="text-align:center;margin-bottom:16px">
+          <div id="mfa-modal-qr" style="display:inline-block;padding:14px;background:#fff;border-radius:10px;border:0.5px solid var(--bdr)">
+            <div style="width:180px;height:180px;background:var(--bg2);border-radius:6px;display:flex;align-items:center;justify-content:center;color:var(--txt3);font-size:12px">Loading QR...</div>
+          </div>
+        </div>
+        <div style="background:var(--bg2);border-radius:var(--r);padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--txt2)">
+          Manual entry code:<br>
+          <code id="mfa-modal-secret" style="font-size:13px;font-weight:700;color:var(--txt);letter-spacing:2px;word-break:break-all">—</code>
+        </div>
+        <div style="margin-bottom:12px">
+          <label style="display:block;font-size:12px;font-weight:600;color:var(--txt2);margin-bottom:5px;text-transform:uppercase;letter-spacing:.4px">6-digit code</label>
+          <input type="text" id="mfa-modal-code" placeholder="000000" maxlength="6"
+            style="width:100%;padding:10px 13px;border:0.5px solid var(--bdr2);border-radius:var(--r);background:var(--bg);color:var(--txt);font-size:22px;letter-spacing:8px;text-align:center;font-family:monospace;outline:none"
+            oninput="this.value=this.value.replace(/\\D/g,'')"
+            onkeydown="if(event.key==='Enter')doMfaModalVerify()">
+        </div>
+        <button class="btn btn-primary btn-full" id="mfa-modal-btn" onclick="doMfaModalVerify()">Activate 2FA</button>
+      </div>`;
+    document.body.appendChild(modal);
+  } else {
+    modal.style.display = 'flex';
+    document.getElementById('mfa-modal-msg').style.display = 'none';
+    document.getElementById('mfa-modal-code').value = '';
+  }
+  await loadMfaQr('mfa-modal-qr', 'mfa-modal-secret', 'mfa-modal-msg');
+}
+
+function closeMfaModal() {
+  const modal = document.getElementById('mfa-inline-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function loadMfaQr(qrElId, secretElId, msgElId) {
   try {
     const { data, error } = await sbClient.auth.mfa.enroll({ factorType: 'totp', issuer: 'FinanceTracker' });
     if (error) throw error;
-
     mfaFactorId = data.id;
-
-    // render QR code using a free QR API
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(data.totp.uri)}`;
-    document.getElementById('mfa-qr-code').innerHTML = `<img src="${qrUrl}" width="180" height="180" alt="QR Code" style="display:block">`;
-    document.getElementById('mfa-secret-key').textContent = data.totp.secret;
+    document.getElementById(qrElId).innerHTML = `<img src="${qrUrl}" width="180" height="180" alt="QR Code" style="display:block;border-radius:4px">`;
+    document.getElementById(secretElId).textContent = data.totp.secret;
   } catch(e) {
-    document.getElementById('mfa-setup-msg').className = 'auth-msg error';
-    document.getElementById('mfa-setup-msg').textContent = 'Error generating QR code: ' + e.message;
+    const msgEl = document.getElementById(msgElId);
+    if (msgEl) { msgEl.style.display='block'; msgEl.className=''; msgEl.style.cssText='padding:10px 13px;border-radius:8px;font-size:13px;margin-bottom:12px;background:var(--red-bg);color:var(--red-txt)'; msgEl.textContent='Error: ' + e.message; }
   }
+}
+
+async function doMfaModalVerify() {
+  const code = document.getElementById('mfa-modal-code').value.trim();
+  const msg  = document.getElementById('mfa-modal-msg');
+  const btn  = document.getElementById('mfa-modal-btn');
+  if (code.length !== 6) {
+    msg.style.display='block'; msg.style.cssText='padding:10px 13px;border-radius:8px;font-size:13px;margin-bottom:12px;background:var(--red-bg);color:var(--red-txt)';
+    msg.textContent='Please enter the 6-digit code.'; return;
+  }
+  btn.innerHTML = '<span class="spinner"></span>Activating...'; btn.disabled = true;
+  try {
+    const { data: challenge, error: ce } = await sbClient.auth.mfa.challenge({ factorId: mfaFactorId });
+    if (ce) throw ce;
+    const { error: ve } = await sbClient.auth.mfa.verify({ factorId: mfaFactorId, challengeId: challenge.id, code });
+    if (ve) throw ve;
+    closeMfaModal();
+    toast('✓ Two-factor authentication enabled!');
+    renderMfaStatus();
+  } catch(e) {
+    msg.style.display='block'; msg.style.cssText='padding:10px 13px;border-radius:8px;font-size:13px;margin-bottom:12px;background:var(--red-bg);color:var(--red-txt)';
+    msg.textContent = e.message?.includes('Invalid') ? 'Incorrect code. Try again.' : e.message;
+    document.getElementById('mfa-modal-code').value = '';
+  }
+  btn.innerHTML = 'Activate 2FA'; btn.disabled = false;
 }
 
 async function doMfaSetupVerify() {
@@ -280,20 +434,12 @@ async function doMfaSetupVerify() {
   const msg  = document.getElementById('mfa-setup-msg');
   const btn  = document.getElementById('mfa-setup-btn');
   if (code.length !== 6) { msg.className='auth-msg error'; msg.textContent='Please enter the 6-digit code from your app.'; return; }
-
   btn.innerHTML = '<span class="spinner"></span>Activating...'; btn.disabled = true;
-
   try {
     const { data: challenge, error: ce } = await sbClient.auth.mfa.challenge({ factorId: mfaFactorId });
     if (ce) throw ce;
-
-    const { error: ve } = await sbClient.auth.mfa.verify({
-      factorId:    mfaFactorId,
-      challengeId: challenge.id,
-      code
-    });
+    const { error: ve } = await sbClient.auth.mfa.verify({ factorId: mfaFactorId, challengeId: challenge.id, code });
     if (ve) throw ve;
-
     toast('✓ Two-factor authentication enabled!');
     showScreen('app');
     renderAll();
@@ -303,7 +449,6 @@ async function doMfaSetupVerify() {
     msg.textContent = e.message?.includes('Invalid') ? 'Incorrect code. Check your app and try again.' : e.message;
     document.getElementById('mfa-setup-code').value = '';
   }
-
   btn.innerHTML = 'Activate 2FA'; btn.disabled = false;
 }
 
@@ -341,7 +486,7 @@ async function renderMfaStatus() {
             <div style="font-size:13px;font-weight:600;color:var(--amber-txt)">2FA not enabled</div>
             <div style="font-size:12px;color:var(--amber-txt);opacity:.8;margin-top:2px">Enable for extra account security</div>
           </div>
-          <button class="btn btn-sm btn-primary" onclick="startMfaSetup()">Enable 2FA</button>
+          <button class="btn btn-sm btn-primary" onclick="startMfaSetup(true)">Enable 2FA</button>
         </div>`;
     }
   } catch(e) {
@@ -383,10 +528,9 @@ async function saveTx() {
   const cat    = document.getElementById('tx-cat').value;
   const note   = document.getElementById('tx-note').value.trim();
   if (!date || !amount || amount <= 0) { toast('Enter valid date and amount'); return; }
-  const btn = document.getElementById('tx-save-btn');
-  btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true;
+  setBtn('tx-save-btn', true);
   const { error } = await sbClient.from('transactions').insert({ user_id: currentUser.id, type, date, amount, category: cat, note });
-  btn.innerHTML = 'Save'; btn.disabled = false;
+  setBtn('tx-save-btn', false, 'Save');
   if (error) { toast('Error: ' + error.message); return; }
   document.getElementById('tx-amount').value = '';
   document.getElementById('tx-note').value   = '';
@@ -412,8 +556,7 @@ async function saveInv() {
   const maturity = document.getElementById('inv-maturity').value || null;
   if (!name || !amount || amount <= 0) { toast('Enter name and invested amount'); return; }
   const extras = collectExtraFields(type);
-  const btn = document.getElementById('inv-save-btn');
-  btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true;
+  setBtn('inv-save-btn', true);
   const { error } = await sbClient.from('investments').insert({
     user_id: currentUser.id, asset_type: type, name,
     amount_invested: amount, current_value: current,
@@ -422,7 +565,7 @@ async function saveInv() {
     maturity_date: maturity,
     extra_data: extras
   });
-  btn.innerHTML = 'Save holding'; btn.disabled = false;
+  setBtn('inv-save-btn', false, 'Save holding');
   if (error) { toast('Error: ' + error.message); return; }
   ['inv-name','inv-amount','inv-current','inv-units','inv-avgprice'].forEach(id => document.getElementById(id).value = '');
   document.getElementById('inv-maturity').value        = '';
@@ -444,11 +587,13 @@ async function saveSalaryProfile() {
   const frequency   = document.getElementById('sal-frequency').value;
   const fy          = document.getElementById('sal-fy').value;
   const uid = currentUser.id;
+  setBtn('sal-save-btn', true);
   if (salaryCache.profile) {
     await sbClient.from('salary_profiles').update({ employer, designation, frequency, financial_year: fy }).eq('user_id', uid);
   } else {
     await sbClient.from('salary_profiles').insert({ user_id: uid, employer, designation, frequency, financial_year: fy });
   }
+  setBtn('sal-save-btn', false, 'Save');
   toast('✓ Salary profile saved');
   await loadData(); renderSalary();
 }
@@ -663,6 +808,7 @@ function renderDashCharts(tx) {
 function renderTransactions() {
   const tbody=document.getElementById('tx-table'), empty=document.getElementById('tx-empty');
   if(!tbody) return;
+  showSectionLoader('tx-loading', false); // hide loader once rendering
   const srch=(document.getElementById('tx-search')?.value||'').toLowerCase();
   const tf=document.getElementById('tx-type-filter')?.value||'all';
   const txs=txCache.filter(t=>{
