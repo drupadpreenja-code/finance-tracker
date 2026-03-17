@@ -274,6 +274,7 @@
 
     <!-- SALARY -->
     <section id="page-salary" class="page">
+      <!-- Profile -->
       <div class="card">
         <div class="card-header"><span class="section-title">Salary profile</span><button class="btn btn-primary btn-sm" id="sal-save-btn" onclick="saveSalaryProfile()">Save</button></div>
         <div class="form-row">
@@ -283,8 +284,10 @@
           <div class="form-group-inline"><label>Financial year</label><select id="sal-fy"><option value="2025-26">2025-26</option><option value="2026-27">2026-27</option></select></div>
         </div>
       </div>
+
+      <!-- Earnings components -->
       <div class="card">
-        <div class="card-header"><span class="section-title">Earnings</span><button class="btn btn-sm btn-primary" onclick="addComponent('earning')">+ Add</button></div>
+        <div class="card-header"><span class="section-title">Earnings components</span><button class="btn btn-sm btn-primary" onclick="addComponent('earning')">+ Add</button></div>
         <div id="earnings-list"></div>
         <div id="add-earning-form" style="display:none;background:var(--bg2);border-radius:var(--r);padding:14px;margin-top:10px">
           <div class="form-row">
@@ -298,8 +301,10 @@
           </div>
         </div>
       </div>
+
+      <!-- Deductions components -->
       <div class="card">
-        <div class="card-header"><span class="section-title">Deductions</span><button class="btn btn-sm btn-primary" onclick="addComponent('deduction')">+ Add</button></div>
+        <div class="card-header"><span class="section-title">Deduction components</span><button class="btn btn-sm btn-primary" onclick="addComponent('deduction')">+ Add</button></div>
         <div id="deductions-list"></div>
         <div id="add-deduction-form" style="display:none;background:var(--bg2);border-radius:var(--r);padding:14px;margin-top:10px">
           <div class="form-row">
@@ -313,7 +318,52 @@
           </div>
         </div>
       </div>
-      <div class="card"><div class="card-header"><span class="section-title">Summary</span></div><div id="salary-summary"></div></div>
+
+      <!-- Record monthly slip -->
+      <div class="card" style="border-color:rgba(24,95,165,.25);background:var(--blue-bg)">
+        <div class="card-header"><span class="section-title" style="color:var(--blue-txt)">Record monthly salary slip</span></div>
+        <p style="font-size:13px;color:var(--blue-txt);opacity:.8;margin-bottom:14px">Save a snapshot of this month's salary. Adjustments (variable pay, arrears, TDS changes) can be made before saving.</p>
+        <div class="form-row">
+          <div class="form-group-inline"><label>Month</label>
+            <select id="slip-month">
+              <option value="1">January</option><option value="2">February</option><option value="3">March</option>
+              <option value="4">April</option><option value="5">May</option><option value="6">June</option>
+              <option value="7">July</option><option value="8">August</option><option value="9">September</option>
+              <option value="10">October</option><option value="11">November</option><option value="12">December</option>
+            </select>
+          </div>
+          <div class="form-group-inline"><label>Year</label>
+            <select id="slip-year"><option value="2024">2024</option><option value="2025">2025</option><option value="2026" selected>2026</option><option value="2027">2027</option></select>
+          </div>
+          <div class="form-group-inline"><label>Gross earnings (₹)</label><input type="number" id="slip-gross" placeholder="0" min="0" inputmode="decimal"></div>
+          <div class="form-group-inline"><label>Total deductions (₹)</label><input type="number" id="slip-deductions" placeholder="0" min="0" inputmode="decimal"></div>
+        </div>
+        <div class="form-row">
+          <div class="form-group-inline"><label>Net take-home (₹)</label>
+            <input type="number" id="slip-net" placeholder="Auto-calculated" min="0" inputmode="decimal">
+          </div>
+          <div class="form-group-inline"><label>Notes (optional)</label><input type="text" id="slip-notes" placeholder="e.g. includes bonus, variable pay adjusted"></div>
+          <div style="display:flex;align-items:flex-end">
+            <button class="btn btn-primary" id="slip-save-btn" onclick="saveSalarySlip()" style="min-height:44px;padding:10px 20px">Save slip</button>
+          </div>
+        </div>
+        <div id="slip-preview" style="margin-top:8px;font-size:12px;color:var(--blue-txt);opacity:.7"></div>
+      </div>
+
+      <!-- Monthly salary history -->
+      <div class="card">
+        <div class="card-header">
+          <span class="section-title">Monthly salary history</span>
+          <select id="slip-year-filter" onchange="renderSalarySlips()" style="width:auto">
+            <option value="2024">2024</option><option value="2025">2025</option><option value="2026" selected>2026</option><option value="2027">2027</option>
+          </select>
+        </div>
+        <div id="salary-slips-list"></div>
+        <div id="salary-slips-empty" class="empty-state" style="display:none"><div class="empty-icon">📅</div>No salary slips recorded yet. Save your first one above.</div>
+      </div>
+
+      <!-- Annual summary -->
+      <div class="card"><div class="card-header"><span class="section-title">Annual summary</span></div><div id="salary-summary"></div></div>
     </section>
 
     <!-- INVESTMENTS -->

@@ -3,7 +3,7 @@
 //  (publishable key is public by design — safe to commit)
 // ══════════════════════════════════════════════════════════
 const APP_SUPABASE_URL = 'https://wrfklddhrtotzremoepp.supabase.co';
-const APP_SUPABASE_KEY = 'sb_publishable_2C7JVxn65eFuauj-fvUQpg_pGwNKnEx';
+const APP_SUPABASE_KEY = 'sb_publishable__m9XckjgsEw_dS0-xYISFg_E94_fkOB';
 // ══════════════════════════════════════════════════════════
 
 // ── STATE ──
@@ -13,7 +13,7 @@ let userProfile = null;
 let appConfig   = {};
 let txCache     = [];
 let invCache    = [];
-let salaryCache = { profile: null, components: [] };
+let salaryCache = { profile: null, components: [], slips: [] };
 let mfaFactorId = null; // stores factor ID during MFA challenge
 
 // ── CHARTS ──
@@ -297,32 +297,34 @@ async function doMfaVerify() {
   if (code.length !== 6) { msg.className='auth-msg error'; msg.textContent='Please enter a 6-digit code.'; return; }
 
   btn.innerHTML = '<span class="spinner"></span>Verifying...'; btn.disabled = true;
+  msg.className = 'auth-msg'; msg.style.display = 'none';
 
   try {
-    // create a challenge
     const { data: challenge, error: ce } = await sbClient.auth.mfa.challenge({ factorId: mfaFactorId });
     if (ce) throw ce;
 
-    // verify the challenge
     const { error: ve } = await sbClient.auth.mfa.verify({
-      factorId:    mfaFactorId,
-      challengeId: challenge.id,
-      code
+      factorId: mfaFactorId, challengeId: challenge.id, code
     });
     if (ve) throw ve;
 
-    // success — now aal2, load the app
+    // success — reset button first, then transition
+    btn.innerHTML = 'Verify'; btn.disabled = false;
     const { data: { user } } = await sbClient.auth.getUser();
     await onLogin(user);
     showScreen('app');
-    renderAll();
-  } catch(e) {
-    msg.className='auth-msg error';
-    msg.textContent = e.message?.includes('Invalid') ? 'Incorrect code. Please try again.' : e.message;
-    document.getElementById('mfa-verify-code').value = '';
-  }
+    // small delay lets DOM fully paint before rendering charts (important on mobile)
+    setTimeout(() => renderAll(), 80);
 
-  btn.innerHTML = 'Verify'; btn.disabled = false;
+  } catch(e) {
+    btn.innerHTML = 'Verify'; btn.disabled = false;
+    msg.className = 'auth-msg error';
+    msg.textContent = e.message?.includes('Invalid') || e.message?.includes('invalid')
+      ? 'Incorrect code. Please try again.'
+      : (e.message || 'Verification failed. Please try again.');
+    document.getElementById('mfa-verify-code').value = '';
+    document.getElementById('mfa-verify-code').focus();
+  }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -508,16 +510,18 @@ async function disableMfa(factorId) {
 
 async function loadData() {
   const uid = currentUser.id;
-  const [{ data: txs }, { data: invs }, { data: sal }, { data: comps }] = await Promise.all([
+  const [{ data: txs }, { data: invs }, { data: sal }, { data: comps }, { data: slips }] = await Promise.all([
     sbClient.from('transactions').select('*').eq('user_id', uid).order('date', { ascending: false }),
     sbClient.from('investments').select('*').eq('user_id', uid).order('created_at', { ascending: false }),
     sbClient.from('salary_profiles').select('*').eq('user_id', uid).single(),
-    sbClient.from('salary_components').select('*').eq('user_id', uid).order('created_at', { ascending: true })
+    sbClient.from('salary_components').select('*').eq('user_id', uid).order('created_at', { ascending: true }),
+    sbClient.from('salary_slips').select('*').eq('user_id', uid).order('year', { ascending: false }).order('month', { ascending: false })
   ]);
   txCache  = txs   || [];
   invCache = invs  || [];
   salaryCache.profile    = sal   || null;
   salaryCache.components = comps || [];
+  salaryCache.slips      = slips || [];
 }
 
 // ── TRANSACTIONS ──
@@ -625,6 +629,42 @@ async function deleteSalaryComponent(id) {
   await sbClient.from('salary_components').delete().eq('id', id).eq('user_id', currentUser.id);
   toast('Removed'); await loadData(); renderSalary();
 }
+
+async function saveSalarySlip() {
+  const month      = parseInt(document.getElementById('slip-month').value);
+  const year       = parseInt(document.getElementById('slip-year').value);
+  const gross      = parseFloat(document.getElementById('slip-gross').value) || 0;
+  const deductions = parseFloat(document.getElementById('slip-deductions').value) || 0;
+  const net        = parseFloat(document.getElementById('slip-net').value) || (gross - deductions);
+  const notes      = document.getElementById('slip-notes').value.trim();
+  if (!gross) { toast('Enter gross earnings'); return; }
+
+  // snapshot current components
+  const components = salaryCache.components.map(c => ({
+    name: c.name, kind: c.kind, amount: Number(c.amount_monthly),
+    taxable: c.taxable, section: c.section, note: c.note
+  }));
+
+  setBtn('slip-save-btn', true);
+  const { error } = await sbClient.from('salary_slips').upsert({
+    user_id: currentUser.id, month, year,
+    gross_earnings: gross, total_deductions: deductions,
+    net_salary: net, notes, components
+  }, { onConflict: 'user_id,month,year' });
+  setBtn('slip-save-btn', false, 'Save slip');
+
+  if (error) { toast('Error: ' + error.message); return; }
+  toast(`✓ Salary slip saved for ${MONTH_NAMES[month-1]} ${year}`);
+  await loadData(); renderSalary();
+}
+
+async function deleteSalarySlip(id) {
+  if (!confirm('Delete this salary slip?')) return;
+  await sbClient.from('salary_slips').delete().eq('id', id).eq('user_id', currentUser.id);
+  toast('Deleted'); await loadData(); renderSalary();
+}
+
+const MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 
 // ══════════════════════════════════════════════════════════
 //  INVESTMENT EXTRA FIELDS
@@ -848,10 +888,10 @@ function renderSalary() {
     ? '<div style="color:var(--txt3);font-size:13px;padding:8px 0">No earnings added yet.</div>'
     : earnings.map(c=>`<div class="salary-component-row">
         <div class="comp-name">${c.name}</div>
-        <div><span class="comp-tag comp-earning">${c.taxable==='no'?'Exempt':c.taxable==='partial'?'Partial':''}</span></div>
+        <div><span class="comp-tag comp-earning">${c.taxable==='no'?'Exempt':c.taxable==='partial'?'Partial':c.taxable==='yes'?'Taxable':''}</span></div>
         <div style="font-size:11px;color:var(--txt3);flex:2">${c.note||''}</div>
         <div class="comp-amount c-green">${fmt(c.amount_monthly)}<span style="font-size:10px;font-weight:400">/mo</span></div>
-        <button class="btn btn-sm btn-danger" onclick="deleteSalaryComponent(${c.id})" style="margin-left:8px">✕</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteSalaryComponent(${c.id})" style="margin-left:6px">✕</button>
       </div>`).join('');
 
   const dedEl = document.getElementById('deductions-list');
@@ -862,28 +902,126 @@ function renderSalary() {
         <div><span class="comp-tag comp-deduction">${c.section||''}</span></div>
         <div style="font-size:11px;color:var(--txt3);flex:2">${c.note||''}</div>
         <div class="comp-amount c-red">${fmt(c.amount_monthly)}<span style="font-size:10px;font-weight:400">/mo</span></div>
-        <button class="btn btn-sm btn-danger" onclick="deleteSalaryComponent(${c.id})" style="margin-left:8px">✕</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteSalaryComponent(${c.id})" style="margin-left:6px">✕</button>
       </div>`).join('');
 
+  // auto-fill slip form with component totals
+  if (earningTotal > 0) {
+    const grossEl = document.getElementById('slip-gross');
+    const dedEl2  = document.getElementById('slip-deductions');
+    const netEl   = document.getElementById('slip-net');
+    if (grossEl && !grossEl.value) grossEl.value = earningTotal;
+    if (dedEl2  && !dedEl2.value)  dedEl2.value  = deductionTotal;
+    if (netEl   && !netEl.value)   netEl.value   = netSalary > 0 ? netSalary : '';
+    // update preview
+    const preview = document.getElementById('slip-preview');
+    if (preview) preview.textContent = earningTotal > 0 ? `Based on components: Gross ${fmt(earningTotal)} − Deductions ${fmt(deductionTotal)} = Net ${fmt(netSalary)}` : '';
+  }
+
+  // set current month in slip form
+  const now = new Date();
+  const slipMonthEl = document.getElementById('slip-month');
+  const slipYearEl  = document.getElementById('slip-year');
+  if (slipMonthEl && !slipMonthEl.dataset.set) {
+    slipMonthEl.value = now.getMonth() + 1;
+    if (slipYearEl) slipYearEl.value = now.getFullYear();
+    slipMonthEl.dataset.set = '1';
+  }
+
+  // annual summary
   const sumEl = document.getElementById('salary-summary');
   if(sumEl) {
     const s80C = deductions.filter(c=>c.section==='80C').reduce((s,c)=>s+Number(c.amount_monthly)*12,0);
     const s80D = deductions.filter(c=>c.section==='80D').reduce((s,c)=>s+Number(c.amount_monthly)*12,0);
     const tds  = deductions.filter(c=>c.section==='TDS').reduce((s,c)=>s+Number(c.amount_monthly),0);
+    // also sum from saved slips for actual vs expected
+    const yearSlips = salaryCache.slips.filter(s => {
+      const fy = (salaryCache.profile?.financial_year || '2025-26').split('-');
+      const fyStart = parseInt('20' + (fy[0]?.slice(-2) || '25'));
+      return (s.month >= 4 && s.year === fyStart) || (s.month < 4 && s.year === fyStart + 1);
+    });
+    const actualGross = yearSlips.reduce((s,sl)=>s+Number(sl.gross_earnings),0);
+    const actualNet   = yearSlips.reduce((s,sl)=>s+Number(sl.net_salary),0);
+
     sumEl.innerHTML = `
       <div class="grid3" style="margin-bottom:16px">
-        <div class="metric-card"><div class="metric-label">Gross earnings/mo</div><div class="metric-value c-green">${fmt(earningTotal)}</div><div class="metric-sub">${fmt(earningTotal*12)}/yr</div></div>
-        <div class="metric-card"><div class="metric-label">Total deductions/mo</div><div class="metric-value c-red">${fmt(deductionTotal)}</div><div class="metric-sub">${fmt(deductionTotal*12)}/yr</div></div>
-        <div class="metric-card"><div class="metric-label">Net take-home/mo</div><div class="metric-value">${fmt(netSalary)}</div><div class="metric-sub">${fmt(netSalary*12)}/yr</div></div>
+        <div class="metric-card"><div class="metric-label">Expected gross/mo</div><div class="metric-value c-green">${fmt(earningTotal)}</div><div class="metric-sub">${fmt(earningTotal*12)}/yr</div></div>
+        <div class="metric-card"><div class="metric-label">Expected deductions/mo</div><div class="metric-value c-red">${fmt(deductionTotal)}</div><div class="metric-sub">${fmt(deductionTotal*12)}/yr</div></div>
+        <div class="metric-card"><div class="metric-label">Expected net/mo</div><div class="metric-value">${fmt(netSalary)}</div><div class="metric-sub">${fmt(netSalary*12)}/yr</div></div>
       </div>
+      ${yearSlips.length > 0 ? `
+      <div style="font-size:12px;font-weight:700;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Actual (from ${yearSlips.length} recorded slips)</div>
+      <div class="grid2" style="margin-bottom:16px">
+        <div class="metric-card"><div class="metric-label">Actual gross (FY)</div><div class="metric-value c-green">${fmt(actualGross)}</div></div>
+        <div class="metric-card"><div class="metric-label">Actual net (FY)</div><div class="metric-value">${fmt(actualNet)}</div></div>
+      </div>` : ''}
       ${s80C>0||s80D>0||tds>0?`
       <div style="font-size:12px;font-weight:700;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Tax summary</div>
       <div class="grid3">
-        ${s80C>0?`<div class="metric-card"><div class="metric-label">80C investments/yr</div><div class="metric-value c-blue">${fmt(s80C)}</div><div class="metric-sub">Limit: ₹1,50,000</div></div>`:''}
-        ${s80D>0?`<div class="metric-card"><div class="metric-label">80D premium/yr</div><div class="metric-value c-blue">${fmt(s80D)}</div><div class="metric-sub">Limit: ₹25,000–50,000</div></div>`:''}
+        ${s80C>0?`<div class="metric-card"><div class="metric-label">80C/yr</div><div class="metric-value c-blue">${fmt(s80C)}</div><div class="metric-sub">Limit: ₹1,50,000</div></div>`:''}
+        ${s80D>0?`<div class="metric-card"><div class="metric-label">80D/yr</div><div class="metric-value c-blue">${fmt(s80D)}</div><div class="metric-sub">Limit: ₹25,000–50,000</div></div>`:''}
         ${tds>0?`<div class="metric-card"><div class="metric-label">TDS/mo</div><div class="metric-value c-amber">${fmt(tds)}</div><div class="metric-sub">${fmt(tds*12)}/yr</div></div>`:''}
       </div>`:''}`;
   }
+
+  renderSalarySlips();
+}
+
+function renderSalarySlips() {
+  const el    = document.getElementById('salary-slips-list');
+  const empty = document.getElementById('salary-slips-empty');
+  if (!el) return;
+
+  const yearFilter = parseInt(document.getElementById('slip-year-filter')?.value || new Date().getFullYear());
+  const slips = salaryCache.slips.filter(s => s.year === yearFilter);
+
+  if (slips.length === 0) {
+    el.innerHTML = '';
+    if (empty) empty.style.display = 'block';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+
+  // annual totals
+  const totalGross = slips.reduce((s,sl)=>s+Number(sl.gross_earnings),0);
+  const totalDed   = slips.reduce((s,sl)=>s+Number(sl.total_deductions),0);
+  const totalNet   = slips.reduce((s,sl)=>s+Number(sl.net_salary),0);
+
+  el.innerHTML = `
+    <div class="grid3" style="margin-bottom:14px">
+      <div class="metric-card"><div class="metric-label">Total gross (${yearFilter})</div><div class="metric-value c-green">${fmt(totalGross)}</div><div class="metric-sub">${slips.length} months recorded</div></div>
+      <div class="metric-card"><div class="metric-label">Total deductions</div><div class="metric-value c-red">${fmt(totalDed)}</div></div>
+      <div class="metric-card"><div class="metric-label">Total net pay</div><div class="metric-value">${fmt(totalNet)}</div></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Month</th><th>Gross (₹)</th><th>Deductions (₹)</th><th>Net take-home (₹)</th><th class="hide-mobile">Notes</th><th></th></tr></thead>
+        <tbody>
+          ${slips.map(sl => `<tr>
+            <td style="font-weight:600">${MONTH_NAMES[sl.month-1]} ${sl.year}</td>
+            <td class="c-green" style="font-weight:600">${fmt(sl.gross_earnings)}</td>
+            <td class="c-red">${fmt(sl.total_deductions)}</td>
+            <td style="font-weight:700">${fmt(sl.net_salary)}</td>
+            <td class="hide-mobile" style="font-size:12px;color:var(--txt2)">${sl.notes||'—'}</td>
+            <td>
+              <button class="btn btn-sm" onclick="prefillSlip(${sl.month},${sl.year},${sl.gross_earnings},${sl.total_deductions},${sl.net_salary})" title="Copy to form">✎</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteSalarySlip(${sl.id})">✕</button>
+            </td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function prefillSlip(month, year, gross, ded, net) {
+  document.getElementById('slip-month').value      = month;
+  document.getElementById('slip-year').value       = year;
+  document.getElementById('slip-gross').value      = gross;
+  document.getElementById('slip-deductions').value = ded;
+  document.getElementById('slip-net').value        = net;
+  // scroll to slip form
+  document.getElementById('slip-save-btn')?.scrollIntoView({ behavior:'smooth', block:'center' });
+  toast('Slip prefilled — edit and save to update');
 }
 
 // ── INVESTMENTS ──
@@ -1160,7 +1298,8 @@ async function deleteAllMyData() {
     sbClient.from('transactions').delete().eq('user_id',currentUser.id),
     sbClient.from('investments').delete().eq('user_id',currentUser.id),
     sbClient.from('salary_components').delete().eq('user_id',currentUser.id),
-    sbClient.from('salary_profiles').delete().eq('user_id',currentUser.id)
+    sbClient.from('salary_profiles').delete().eq('user_id',currentUser.id),
+    sbClient.from('salary_slips').delete().eq('user_id',currentUser.id)
   ]);
   await loadData(); renderAll(); toast('All data deleted');
 }
