@@ -1,9 +1,6 @@
 // ══════════════════════════════════════════════════════════
-//  OWNER: Fill in your Supabase credentials
-//  (publishable key is public by design — safe to commit)
-// ══════════════════════════════════════════════════════════
-const APP_SUPABASE_URL = 'https://wrfklddhrtotzremoepp.supabase.co';
-const APP_SUPABASE_KEY = 'sb_publishable_2C7JVxn65eFuauj-fvUQpg_pGwNKnEx';
+//  FinanceTracker — app.js
+//  Credentials are in config.js — edit that file only.
 // ══════════════════════════════════════════════════════════
 
 // ── STATE ──
@@ -105,7 +102,6 @@ function applyThemeToBtn() {
 }
 
 async function boot() {
-  // apply saved theme immediately before anything renders
   const savedTheme = localStorage.getItem('ft_theme');
   if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
   updateThemeBtn(savedTheme);
@@ -113,97 +109,47 @@ async function boot() {
   if (!APP_SUPABASE_URL || APP_SUPABASE_URL.includes('PASTE_YOUR')) {
     hidePageLoader(); showScreen('config'); return;
   }
+
   sbClient = window.supabase.createClient(APP_SUPABASE_URL, APP_SUPABASE_KEY);
 
-  // fetch app config silently
   try {
     const { data } = await sbClient.from('app_config').select('key,value');
     if (data) data.forEach(r => { appConfig[r.key] = r.value; });
-  } catch(e) { /* table may not exist yet */ }
+  } catch(e) {}
 
   try {
     const { data: { session } } = await sbClient.auth.getSession();
-
-    // Set up listener FIRST before acting on existing session
-    // This prevents double-firing on fresh logins
-    sbClient.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session && !sessionHandling) {
-        await handleSession(session.user);
-      }
-      if (event === 'SIGNED_OUT') {
-        sessionHandling = false;
-        currentUser = null;
-        showScreen('auth');
-      }
-    });
-
     hidePageLoader();
 
     if (session) {
-      // Existing session on page load — handle directly
-      await handleSession(session.user);
+      await enterApp(session.user);
     } else {
       showScreen('auth');
     }
-
   } catch(e) {
     console.error(e);
     hidePageLoader();
     showScreen('auth');
   }
+
+  // listen for auth changes (sign in / sign out)
+  sbClient.auth.onAuthStateChange(async (event, session) => {
+    if (event === 'SIGNED_IN' && session && !currentUser) {
+      await enterApp(session.user);
+    }
+    if (event === 'SIGNED_OUT') {
+      currentUser = null;
+      mfaFactorId = null;
+      showScreen('auth');
+    }
+  });
 }
 
-// guard against handleSession being called concurrently
-let sessionHandling = false;
-
-// ── After successful password auth — check if MFA is needed ──
-async function handleSession(user) {
-  if (sessionHandling) return;
-  sessionHandling = true;
-
-  try {
-    const { data: aalData, error: aalErr } = await sbClient.auth.mfa.getAuthenticatorAssuranceLevel();
-    if (aalErr) throw aalErr;
-    const currentLevel = aalData?.currentLevel;
-
-    if (currentLevel === 'aal1') {
-      const { data: factorData } = await sbClient.auth.mfa.listFactors();
-      const verifiedFactor = factorData?.totp?.find(f => f.status === 'verified');
-
-      if (verifiedFactor) {
-        // MFA enrolled but not yet verified this session
-        mfaFactorId = verifiedFactor.id;
-        showScreen('mfa-verify');
-        return;
-      }
-
-      // No MFA enrolled — go straight into app
-      await onLogin(user);
-      showScreen('app');
-      setTimeout(() => {
-        renderAll();
-        // prompt MFA setup after a short delay so app is fully painted
-        const hasAnyFactor = factorData?.totp?.length > 0;
-        if (!hasAnyFactor) {
-          setTimeout(() => startMfaSetup(), 500);
-        }
-      }, 100);
-      return;
-    }
-
-    // aal2 = fully MFA verified
-    await onLogin(user);
-    showScreen('app');
-    setTimeout(() => renderAll(), 100);
-
-  } catch(e) {
-    console.error('handleSession error:', e);
-    // on any error just show auth screen
-    showScreen('auth');
-  } finally {
-    // release guard after a delay to prevent rapid re-triggers
-    setTimeout(() => { sessionHandling = false; }, 1000);
-  }
+// Single entry point into the app after any successful auth
+async function enterApp(user) {
+  await onLogin(user);
+  showScreen('app');
+  setTimeout(() => renderAll(), 50);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -347,20 +293,14 @@ async function doMfaVerify() {
     });
     if (ve) throw ve;
 
-    // success — reset button first, then transition
     btn.innerHTML = 'Verify'; btn.disabled = false;
     const { data: { user } } = await sbClient.auth.getUser();
-    await onLogin(user);
-    showScreen('app');
-    // small delay lets DOM fully paint before rendering charts (important on mobile)
-    setTimeout(() => renderAll(), 80);
+    await enterApp(user);
 
   } catch(e) {
     btn.innerHTML = 'Verify'; btn.disabled = false;
     msg.className = 'auth-msg error';
-    msg.textContent = e.message?.includes('Invalid') || e.message?.includes('invalid')
-      ? 'Incorrect code. Please try again.'
-      : (e.message || 'Verification failed. Please try again.');
+    msg.textContent = e.message?.includes('nvalid') ? 'Incorrect code. Please try again.' : (e.message || 'Verification failed.');
     document.getElementById('mfa-verify-code').value = '';
     document.getElementById('mfa-verify-code').focus();
   }
@@ -515,7 +455,7 @@ async function doMfaSetupVerify() {
 
 function skipMfaSetup() {
   showScreen('app');
-  renderAll();
+  setTimeout(() => renderAll(), 50);
   toast('You can enable 2FA anytime from the Family tab.');
 }
 
