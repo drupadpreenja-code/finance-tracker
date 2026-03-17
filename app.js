@@ -157,6 +157,11 @@ async function boot() {
 // Single entry point after any successful password auth
 async function enterApp(user) {
   dbg('enterApp: ' + user.email);
+
+  // Set currentUser immediately — this blocks any duplicate SIGNED_IN events
+  // from onAuthStateChange (!currentUser guard) while we handle this flow
+  currentUser = user;
+
   try {
     const { data: aalData, error: aalErr } = await sbClient.auth.mfa.getAuthenticatorAssuranceLevel();
     if (aalErr) throw aalErr;
@@ -171,6 +176,7 @@ async function enterApp(user) {
       if (verified) {
         mfaFactorId = verified.id;
         showScreen('mfa-verify');
+        // keep currentUser set — cleared only on sign out
         return;
       }
     }
@@ -293,8 +299,9 @@ async function doForgotPassword() {
 }
 
 async function doLogout() {
-  await sbClient.auth.signOut();
+  currentUser = null;
   mfaFactorId = null;
+  await sbClient.auth.signOut();
 }
 
 async function onLogin(user) {
@@ -333,9 +340,8 @@ async function doMfaVerify() {
     if (ve) throw ve;
 
     btn.innerHTML = 'Verify'; btn.disabled = false;
-    const { data: { user } } = await sbClient.auth.getUser();
-    // Go directly to app — MFA is now verified (aal2), skip the MFA check in enterApp
-    await onLogin(user);
+    // currentUser was already set by enterApp — just load data and go in
+    await onLogin(currentUser);
     showScreen('app');
     setTimeout(() => renderAll(), 50);
 
