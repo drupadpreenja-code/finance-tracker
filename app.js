@@ -3,7 +3,7 @@
 //  (publishable key is public by design — safe to commit)
 // ══════════════════════════════════════════════════════════
 const APP_SUPABASE_URL = 'https://wrfklddhrtotzremoepp.supabase.co';
-const APP_SUPABASE_KEY = 'sb_publishable__m9XckjgsEw_dS0-xYISFg_E94_fkOB';
+const APP_SUPABASE_KEY = 'sb_publishable_2C7JVxn65eFuauj-fvUQpg_pGwNKnEx';
 // ══════════════════════════════════════════════════════════
 
 // ── STATE ──
@@ -394,15 +394,35 @@ function closeMfaModal() {
 
 async function loadMfaQr(qrElId, secretElId, msgElId) {
   try {
-    const { data, error } = await sbClient.auth.mfa.enroll({ factorType: 'totp', issuer: 'FinanceTracker' });
+    // unenroll any existing unverified factors first to avoid "already exists" error
+    const { data: { totp } } = await sbClient.auth.mfa.listFactors();
+    if (totp && totp.length > 0) {
+      for (const factor of totp) {
+        if (factor.status !== 'verified') {
+          await sbClient.auth.mfa.unenroll({ factorId: factor.id });
+        }
+      }
+    }
+
+    // now enroll fresh
+    const { data, error } = await sbClient.auth.mfa.enroll({
+      factorType: 'totp',
+      issuer: 'FinanceTracker',
+      friendlyName: 'FinanceTracker-' + Date.now() // unique name prevents collision
+    });
     if (error) throw error;
+
     mfaFactorId = data.id;
     const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(data.totp.uri)}`;
     document.getElementById(qrElId).innerHTML = `<img src="${qrUrl}" width="180" height="180" alt="QR Code" style="display:block;border-radius:4px">`;
     document.getElementById(secretElId).textContent = data.totp.secret;
   } catch(e) {
     const msgEl = document.getElementById(msgElId);
-    if (msgEl) { msgEl.style.display='block'; msgEl.className=''; msgEl.style.cssText='padding:10px 13px;border-radius:8px;font-size:13px;margin-bottom:12px;background:var(--red-bg);color:var(--red-txt)'; msgEl.textContent='Error: ' + e.message; }
+    if (msgEl) {
+      msgEl.style.display = 'block';
+      msgEl.style.cssText = 'padding:10px 13px;border-radius:8px;font-size:13px;margin-bottom:12px;background:var(--red-bg);color:var(--red-txt)';
+      msgEl.textContent = 'Error: ' + e.message;
+    }
   }
 }
 
