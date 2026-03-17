@@ -8,17 +8,16 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="https://js.hcaptcha.com/1/api.js" async defer></script>
 </head>
 <body>
 <div id="toast"></div>
 
-<!-- ══════════ CONFIG ERROR SCREEN ══════════ -->
+<!-- ══════════ CONFIG ERROR ══════════ -->
 <div id="config-screen" style="display:none;min-height:100vh;align-items:center;justify-content:center;padding:24px">
   <div class="auth-card" style="max-width:480px">
     <div class="auth-logo"><div class="auth-logo-icon">₹</div><span class="auth-logo-text">FinanceTracker</span></div>
     <h2 class="auth-title">Configuration missing</h2>
-    <p class="auth-sub" style="color:var(--red-txt)">App credentials not configured. Please open <code>app.js</code> and fill in your Supabase URL and anon key.</p>
+    <p class="auth-sub" style="color:var(--red-txt)">Open <code>app.js</code> and fill in your Supabase URL and publishable key at the top.</p>
   </div>
 </div>
 
@@ -30,7 +29,6 @@
       <button class="auth-tab active" onclick="switchTab('login')">Sign in</button>
       <button class="auth-tab" onclick="switchTab('signup')">Create account</button>
     </div>
-
     <!-- LOGIN -->
     <div id="tab-login">
       <h2 class="auth-title">Welcome back</h2>
@@ -38,14 +36,11 @@
       <div id="login-msg" class="auth-msg"></div>
       <div class="form-group"><label>Email</label><input type="email" id="login-email" placeholder="you@email.com"></div>
       <div class="form-group"><label>Password</label><input type="password" id="login-password" placeholder="••••••••" onkeydown="if(event.key==='Enter')doLogin()"></div>
-      <div class="captcha-wrap"><div id="login-captcha"></div></div>
-      <div class="captcha-note">Protected by hCaptcha</div>
       <button class="btn btn-primary btn-full" id="login-btn" onclick="doLogin()">Sign in</button>
       <div style="margin-top:12px;text-align:center">
         <button class="btn btn-sm" style="color:var(--txt2);border:none" onclick="doForgotPassword()">Forgot password?</button>
       </div>
     </div>
-
     <!-- SIGNUP -->
     <div id="tab-signup" style="display:none">
       <h2 class="auth-title">Create account</h2>
@@ -54,9 +49,56 @@
       <div class="form-group"><label>Full name</label><input type="text" id="signup-name" placeholder="Rahul Sharma"></div>
       <div class="form-group"><label>Email</label><input type="email" id="signup-email" placeholder="you@email.com"></div>
       <div class="form-group"><label>Password</label><input type="password" id="signup-password" placeholder="Min. 6 characters" onkeydown="if(event.key==='Enter')doSignup()"></div>
-      <div class="captcha-wrap"><div id="signup-captcha"></div></div>
-      <div class="captcha-note">Protected by hCaptcha</div>
       <button class="btn btn-primary btn-full" id="signup-btn" onclick="doSignup()">Create account</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ MFA VERIFY (after login if MFA enrolled) ══════════ -->
+<div id="mfa-verify-screen" style="display:none;min-height:100vh;align-items:center;justify-content:center;padding:24px">
+  <div class="auth-card">
+    <div class="auth-logo"><div class="auth-logo-icon">₹</div><span class="auth-logo-text">FinanceTracker</span></div>
+    <h2 class="auth-title">Two-factor auth</h2>
+    <p class="auth-sub">Enter the 6-digit code from your authenticator app.</p>
+    <div id="mfa-verify-msg" class="auth-msg"></div>
+    <div class="form-group">
+      <label>6-digit code</label>
+      <input type="text" id="mfa-verify-code" placeholder="000000" maxlength="6"
+        style="font-size:22px;letter-spacing:8px;text-align:center;font-family:monospace"
+        oninput="this.value=this.value.replace(/\D/g,'')"
+        onkeydown="if(event.key==='Enter')doMfaVerify()">
+    </div>
+    <button class="btn btn-primary btn-full" id="mfa-verify-btn" onclick="doMfaVerify()">Verify</button>
+    <div style="margin-top:12px;text-align:center">
+      <button class="btn btn-sm" style="color:var(--txt2);border:none" onclick="doLogout()">Back to sign in</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ MFA SETUP (after first login, MFA not yet enrolled) ══════════ -->
+<div id="mfa-setup-screen" style="display:none;min-height:100vh;align-items:center;justify-content:center;padding:24px">
+  <div class="auth-card" style="max-width:460px">
+    <div class="auth-logo"><div class="auth-logo-icon">₹</div><span class="auth-logo-text">FinanceTracker</span></div>
+    <h2 class="auth-title">Set up two-factor auth</h2>
+    <p class="auth-sub">Scan this QR code with <strong>Google Authenticator</strong> or <strong>Authy</strong>. Then enter the 6-digit code to confirm.</p>
+    <div id="mfa-setup-msg" class="auth-msg"></div>
+    <div style="text-align:center;margin:20px 0">
+      <div id="mfa-qr-code" style="display:inline-block;padding:16px;background:#fff;border-radius:12px;border:0.5px solid var(--bdr)"></div>
+    </div>
+    <div style="background:var(--bg2);border-radius:var(--r);padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--txt2)">
+      Can't scan? Enter this code manually:<br>
+      <code id="mfa-secret-key" style="font-size:13px;font-weight:700;color:var(--txt);letter-spacing:2px;word-break:break-all"></code>
+    </div>
+    <div class="form-group">
+      <label>Enter 6-digit code to confirm setup</label>
+      <input type="text" id="mfa-setup-code" placeholder="000000" maxlength="6"
+        style="font-size:22px;letter-spacing:8px;text-align:center;font-family:monospace"
+        oninput="this.value=this.value.replace(/\D/g,'')"
+        onkeydown="if(event.key==='Enter')doMfaSetupVerify()">
+    </div>
+    <button class="btn btn-primary btn-full" id="mfa-setup-btn" onclick="doMfaSetupVerify()">Activate 2FA</button>
+    <div style="margin-top:10px;text-align:center">
+      <button class="btn btn-sm" style="color:var(--txt2);border:none" onclick="skipMfaSetup()">Skip for now</button>
     </div>
   </div>
 </div>
@@ -69,10 +111,10 @@
       <div class="user-pill"><div class="user-dot"></div><span id="topbar-user">—</span></div>
     </div>
     <div class="topbar-right">
+      <button class="btn btn-sm" onclick="toggleTheme()" id="theme-btn">🌙 Dark</button>
       <button class="btn btn-sm btn-danger" onclick="doLogout()">Sign out</button>
     </div>
   </header>
-
   <nav class="nav-wrap">
     <button class="nav-btn active" onclick="showPage('dashboard',this)">Dashboard</button>
     <button class="nav-btn" onclick="showPage('transactions',this)">Transactions</button>
@@ -81,10 +123,9 @@
     <button class="nav-btn" onclick="showPage('allocation',this)">Allocation</button>
     <button class="nav-btn" onclick="showPage('family',this)">Family</button>
   </nav>
-
   <main class="main">
 
-    <!-- ═══ DASHBOARD ═══ -->
+    <!-- DASHBOARD -->
     <section id="page-dashboard" class="page active">
       <div class="filter-bar">
         <span class="filter-label">Period:</span>
@@ -102,11 +143,7 @@
         <button class="btn btn-sm" style="margin-left:auto" onclick="exportExcel()">⬇ Export Excel</button>
       </div>
       <div class="nw-banner">
-        <div>
-          <div class="nw-label">Net worth</div>
-          <div class="nw-value" id="nw-total">₹0</div>
-          <div style="font-size:12px;opacity:.5;margin-top:4px" id="nw-sub"></div>
-        </div>
+        <div><div class="nw-label">Net worth</div><div class="nw-value" id="nw-total">₹0</div><div style="font-size:12px;opacity:.5;margin-top:4px" id="nw-sub"></div></div>
         <div class="nw-stats" id="nw-stats"></div>
       </div>
       <div class="grid4" id="summary-cards" style="margin-bottom:20px"></div>
@@ -126,21 +163,16 @@
           <div class="chart-container" style="height:200px"><canvas id="chart-pie"></canvas></div>
         </div>
       </div>
-      <div class="card">
-        <div class="card-header"><span class="card-title">Cumulative cash flow</span></div>
-        <div class="chart-container" style="height:180px"><canvas id="chart-nw"></canvas></div>
-      </div>
+      <div class="card"><div class="card-header"><span class="card-title">Cumulative cash flow</span></div><div class="chart-container" style="height:180px"><canvas id="chart-nw"></canvas></div></div>
       <div class="card"><div class="card-header"><span class="card-title">Quick insights</span></div><div id="quick-insights"></div></div>
     </section>
 
-    <!-- ═══ TRANSACTIONS ═══ -->
+    <!-- TRANSACTIONS -->
     <section id="page-transactions" class="page">
       <div class="card">
         <div class="card-header"><span class="section-title">Add transaction</span></div>
         <div class="form-row">
-          <div class="form-group-inline"><label>Type</label>
-            <select id="tx-type"><option value="income">Income</option><option value="expense">Expense</option><option value="saving">Saving</option></select>
-          </div>
+          <div class="form-group-inline"><label>Type</label><select id="tx-type"><option value="income">Income</option><option value="expense">Expense</option><option value="saving">Saving</option></select></div>
           <div class="form-group-inline"><label>Date</label><input type="date" id="tx-date"></div>
           <div class="form-group-inline"><label>Amount (₹)</label><input type="number" id="tx-amount" placeholder="0" min="0"></div>
           <div class="form-group-inline"><label>Category</label>
@@ -154,117 +186,66 @@
         </div>
         <div class="form-row">
           <div class="form-group-inline" style="flex:3"><label>Note</label><input type="text" id="tx-note" placeholder="e.g. HDFC salary, Zomato..."></div>
-          <div class="form-group-inline" style="flex:0.6;display:flex;align-items:flex-end">
-            <button class="btn btn-primary" style="width:100%;height:37px" id="tx-save-btn" onclick="saveTx()">Save</button>
-          </div>
+          <div class="form-group-inline" style="flex:0.6;display:flex;align-items:flex-end"><button class="btn btn-primary" style="width:100%;height:37px" id="tx-save-btn" onclick="saveTx()">Save</button></div>
         </div>
       </div>
       <div class="card">
-        <div class="card-header">
-          <span class="section-title">History</span>
+        <div class="card-header"><span class="section-title">History</span>
           <div style="display:flex;gap:8px">
             <input type="text" id="tx-search" placeholder="Search..." style="width:160px" oninput="renderTransactions()">
-            <select id="tx-type-filter" onchange="renderTransactions()" style="width:120px">
-              <option value="all">All</option><option value="income">Income</option><option value="expense">Expense</option><option value="saving">Saving</option>
-            </select>
+            <select id="tx-type-filter" onchange="renderTransactions()" style="width:120px"><option value="all">All</option><option value="income">Income</option><option value="expense">Expense</option><option value="saving">Saving</option></select>
           </div>
         </div>
-        <div class="table-wrap">
-          <table><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Note</th><th style="text-align:right">Amount</th><th></th></tr></thead>
-          <tbody id="tx-table"></tbody></table>
-        </div>
+        <div class="table-wrap"><table><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Note</th><th style="text-align:right">Amount</th><th></th></tr></thead><tbody id="tx-table"></tbody></table></div>
         <div id="tx-empty" class="empty-state" style="display:none"><div class="empty-icon">📝</div>No transactions yet.</div>
       </div>
     </section>
 
-    <!-- ═══ SALARY ═══ -->
+    <!-- SALARY -->
     <section id="page-salary" class="page">
-      <!-- Salary Profile -->
       <div class="card">
-        <div class="card-header">
-          <span class="section-title">Salary profile</span>
-          <button class="btn btn-primary btn-sm" onclick="saveSalaryProfile()">Save profile</button>
-        </div>
+        <div class="card-header"><span class="section-title">Salary profile</span><button class="btn btn-primary btn-sm" onclick="saveSalaryProfile()">Save profile</button></div>
         <div class="form-row">
           <div class="form-group-inline"><label>Employer name</label><input type="text" id="sal-employer" placeholder="e.g. Infosys Ltd"></div>
           <div class="form-group-inline"><label>Designation</label><input type="text" id="sal-designation" placeholder="e.g. Senior Engineer"></div>
-          <div class="form-group-inline"><label>Pay frequency</label>
-            <select id="sal-frequency"><option value="monthly">Monthly</option><option value="bi-weekly">Bi-weekly</option></select>
-          </div>
-          <div class="form-group-inline"><label>Financial year</label>
-            <select id="sal-fy"><option value="2025-26">2025-26</option><option value="2026-27">2026-27</option></select>
-          </div>
+          <div class="form-group-inline"><label>Pay frequency</label><select id="sal-frequency"><option value="monthly">Monthly</option><option value="bi-weekly">Bi-weekly</option></select></div>
+          <div class="form-group-inline"><label>Financial year</label><select id="sal-fy"><option value="2025-26">2025-26</option><option value="2026-27">2026-27</option></select></div>
         </div>
       </div>
-
-      <!-- Earnings -->
       <div class="card">
-        <div class="card-header">
-          <span class="section-title">Earnings</span>
-          <button class="btn btn-sm btn-primary" onclick="addComponent('earning')">+ Add earning</button>
-        </div>
+        <div class="card-header"><span class="section-title">Earnings</span><button class="btn btn-sm btn-primary" onclick="addComponent('earning')">+ Add earning</button></div>
         <div id="earnings-list"></div>
-        <!-- Add earning form -->
         <div id="add-earning-form" style="display:none;background:var(--bg2);border-radius:var(--r);padding:14px;margin-top:12px">
           <div class="form-row">
-            <div class="form-group-inline"><label>Component name</label><input type="text" id="comp-earn-name" placeholder="e.g. Basic, HRA, LTA..."></div>
+            <div class="form-group-inline"><label>Component name</label><input type="text" id="comp-earn-name" placeholder="e.g. Basic, HRA, LTA"></div>
             <div class="form-group-inline"><label>Amount (₹/month)</label><input type="number" id="comp-earn-amount" placeholder="0" min="0"></div>
-            <div class="form-group-inline"><label>Taxable?</label>
-              <select id="comp-earn-taxable"><option value="yes">Yes — fully taxable</option><option value="partial">Partial — exempt up to limit</option><option value="no">No — fully exempt</option></select>
-            </div>
+            <div class="form-group-inline"><label>Taxable?</label><select id="comp-earn-taxable"><option value="yes">Yes — fully taxable</option><option value="partial">Partial — exempt up to limit</option><option value="no">No — fully exempt</option></select></div>
           </div>
           <div class="form-row">
-            <div class="form-group-inline"><label>Notes</label><input type="text" id="comp-earn-note" placeholder="Optional note or exemption detail"></div>
-            <div style="display:flex;align-items:flex-end;gap:8px">
-              <button class="btn btn-primary btn-sm" onclick="saveComponent('earning')">Add</button>
-              <button class="btn btn-sm" onclick="cancelComponent('earning')">Cancel</button>
-            </div>
+            <div class="form-group-inline"><label>Notes</label><input type="text" id="comp-earn-note" placeholder="Optional note"></div>
+            <div style="display:flex;align-items:flex-end;gap:8px"><button class="btn btn-primary btn-sm" onclick="saveComponent('earning')">Add</button><button class="btn btn-sm" onclick="cancelComponent('earning')">Cancel</button></div>
           </div>
         </div>
       </div>
-
-      <!-- Deductions -->
       <div class="card">
-        <div class="card-header">
-          <span class="section-title">Deductions</span>
-          <button class="btn btn-sm btn-primary" onclick="addComponent('deduction')">+ Add deduction</button>
-        </div>
+        <div class="card-header"><span class="section-title">Deductions</span><button class="btn btn-sm btn-primary" onclick="addComponent('deduction')">+ Add deduction</button></div>
         <div id="deductions-list"></div>
-        <!-- Add deduction form -->
         <div id="add-deduction-form" style="display:none;background:var(--bg2);border-radius:var(--r);padding:14px;margin-top:12px">
           <div class="form-row">
-            <div class="form-group-inline"><label>Component name</label><input type="text" id="comp-ded-name" placeholder="e.g. PF, TDS, Professional Tax..."></div>
+            <div class="form-group-inline"><label>Component name</label><input type="text" id="comp-ded-name" placeholder="e.g. PF, TDS, Professional Tax"></div>
             <div class="form-group-inline"><label>Amount (₹/month)</label><input type="number" id="comp-ded-amount" placeholder="0" min="0"></div>
-            <div class="form-group-inline"><label>Section / type</label>
-              <select id="comp-ded-section">
-                <option value="80C">80C (PF/PPF/ELSS/LIC)</option>
-                <option value="80D">80D (Health insurance)</option>
-                <option value="80CCD">80CCD(1B) (NPS)</option>
-                <option value="HRA">HRA exemption</option>
-                <option value="TDS">TDS (Income tax)</option>
-                <option value="PT">Professional tax</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
+            <div class="form-group-inline"><label>Section / type</label><select id="comp-ded-section"><option value="80C">80C (PF/PPF/ELSS/LIC)</option><option value="80D">80D (Health insurance)</option><option value="80CCD">80CCD(1B) (NPS)</option><option value="HRA">HRA exemption</option><option value="TDS">TDS (Income tax)</option><option value="PT">Professional tax</option><option value="other">Other</option></select></div>
           </div>
           <div class="form-row">
             <div class="form-group-inline"><label>Notes</label><input type="text" id="comp-ded-note" placeholder="Optional note"></div>
-            <div style="display:flex;align-items:flex-end;gap:8px">
-              <button class="btn btn-primary btn-sm" onclick="saveComponent('deduction')">Add</button>
-              <button class="btn btn-sm" onclick="cancelComponent('deduction')">Cancel</button>
-            </div>
+            <div style="display:flex;align-items:flex-end;gap:8px"><button class="btn btn-primary btn-sm" onclick="saveComponent('deduction')">Add</button><button class="btn btn-sm" onclick="cancelComponent('deduction')">Cancel</button></div>
           </div>
         </div>
       </div>
-
-      <!-- Salary summary -->
-      <div class="card">
-        <div class="card-header"><span class="section-title">Salary summary</span></div>
-        <div id="salary-summary"></div>
-      </div>
+      <div class="card"><div class="card-header"><span class="section-title">Salary summary</span></div><div id="salary-summary"></div></div>
     </section>
 
-    <!-- ═══ INVESTMENTS ═══ -->
+    <!-- INVESTMENTS -->
     <section id="page-investments" class="page">
       <div class="card">
         <div class="card-header"><span class="section-title">Add holding</span></div>
@@ -277,7 +258,7 @@
               <optgroup label="Other"><option value="gold">Physical Gold</option><option value="real_estate">Real Estate</option><option value="crypto">Crypto</option></optgroup>
             </select>
           </div>
-          <div class="form-group-inline"><label>Name / Ticker</label><input type="text" id="inv-name" placeholder="e.g. AAPL, HDFC Bank, SBI FD"></div>
+          <div class="form-group-inline"><label>Name / Ticker</label><input type="text" id="inv-name" placeholder="e.g. AAPL, HDFC Bank"></div>
           <div class="form-group-inline"><label>Invested (₹)</label><input type="number" id="inv-amount" placeholder="0" min="0"></div>
           <div class="form-group-inline"><label>Current value (₹)</label><input type="number" id="inv-current" placeholder="0" min="0"></div>
         </div>
@@ -287,31 +268,22 @@
           <div class="form-group-inline"><label>Purchase date</label><input type="date" id="inv-date"></div>
           <div class="form-group-inline"><label>Maturity date</label><input type="date" id="inv-maturity"></div>
         </div>
-        <!-- Dynamic extra fields based on type -->
         <div id="inv-extra-fields"></div>
-        <div style="margin-top:4px">
-          <button class="btn btn-primary" id="inv-save-btn" onclick="saveInv()">Save holding</button>
-        </div>
+        <div style="margin-top:4px"><button class="btn btn-primary" id="inv-save-btn" onclick="saveInv()">Save holding</button></div>
       </div>
-
       <div id="inv-top-cards" class="grid4" style="margin-bottom:16px"></div>
       <div class="grid2">
         <div class="card"><div class="card-header"><span class="card-title">Portfolio breakdown</span></div><div id="legend-inv" class="legend"></div><div class="chart-container" style="height:220px"><canvas id="chart-inv-pie"></canvas></div></div>
         <div class="card"><div class="card-header"><span class="card-title">Equity geography</span></div><div id="legend-eq" class="legend"></div><div class="chart-container" style="height:220px"><canvas id="chart-eq-split"></canvas></div></div>
       </div>
       <div class="card">
-        <div class="card-header"><span class="section-title">All holdings</span>
-          <input type="text" id="inv-search" placeholder="Search..." style="width:180px" oninput="renderInvestments()">
-        </div>
-        <div class="table-wrap">
-          <table><thead><tr><th>Name</th><th>Type</th><th>Details</th><th>Invested</th><th>Current</th><th style="text-align:right">P&L</th><th style="text-align:right">Return</th><th></th></tr></thead>
-          <tbody id="inv-table"></tbody></table>
-        </div>
+        <div class="card-header"><span class="section-title">All holdings</span><input type="text" id="inv-search" placeholder="Search..." style="width:180px" oninput="renderInvestments()"></div>
+        <div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Details</th><th>Invested</th><th>Current</th><th style="text-align:right">P&L</th><th style="text-align:right">Return</th><th></th></tr></thead><tbody id="inv-table"></tbody></table></div>
         <div id="inv-empty" class="empty-state" style="display:none"><div class="empty-icon">📈</div>No holdings yet.</div>
       </div>
     </section>
 
-    <!-- ═══ ALLOCATION ═══ -->
+    <!-- ALLOCATION -->
     <section id="page-allocation" class="page">
       <div class="grid2">
         <div class="card"><div class="card-header"><span class="card-title">Asset class allocation</span></div><div id="alloc-blocks"></div></div>
@@ -325,11 +297,11 @@
       <div class="card"><div class="card-header"><span class="card-title">Debt instruments detail</span></div><div id="debt-detail"></div></div>
     </section>
 
-    <!-- ═══ FAMILY ═══ -->
+    <!-- FAMILY -->
     <section id="page-family" class="page">
       <div class="card">
         <div class="card-header"><span class="section-title">Family members</span></div>
-        <p style="font-size:13px;color:var(--txt2);margin-bottom:16px">Each member's data is completely isolated — only they can see their own records.</p>
+        <p style="font-size:13px;color:var(--txt2);margin-bottom:16px">Each member's data is completely isolated.</p>
         <div id="family-list"></div>
         <hr class="divider">
         <div class="card-header" style="margin-bottom:12px"><span class="section-title">Share app link</span></div>
@@ -342,16 +314,19 @@
         <div class="card-header"><span class="section-title">Your account</span></div>
         <div id="my-profile"></div>
         <hr class="divider">
+        <div class="card-title" style="margin-bottom:12px">Two-factor authentication (2FA)</div>
+        <div id="mfa-status-block"></div>
+        <hr class="divider">
         <div class="card-title" style="margin-bottom:12px">Data management</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-sm btn-primary" onclick="exportExcel()">Export to Excel</button>
           <button class="btn btn-sm" onclick="exportJSON()">Download backup</button>
-          <label class="btn btn-sm" style="cursor:pointer">Restore backup <input type="file" accept=".json" style="display:none" onchange="importJSON(event)"></label>
+          <label class="btn btn-sm" style="cursor:pointer">Restore backup<input type="file" accept=".json" style="display:none" onchange="importJSON(event)"></label>
         </div>
       </div>
       <div class="card" style="border-color:rgba(226,75,74,.3)">
         <div class="card-header"><span class="section-title" style="color:var(--red)">Danger zone</span></div>
-        <p style="font-size:13px;color:var(--txt2);margin-bottom:12px">Permanently delete ALL your data. This cannot be undone.</p>
+        <p style="font-size:13px;color:var(--txt2);margin-bottom:12px">Permanently delete ALL your data. Cannot be undone.</p>
         <button class="btn btn-danger" onclick="deleteAllMyData()">Delete all my data</button>
       </div>
     </section>

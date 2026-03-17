@@ -1,27 +1,25 @@
 // ══════════════════════════════════════════════════════════
-//  OWNER: Fill in your Supabase credentials below
-//  (anon key is public by design — safe to commit to GitHub)
+//  OWNER: Fill in your Supabase credentials
+//  (publishable key is public by design — safe to commit)
 // ══════════════════════════════════════════════════════════
 const APP_SUPABASE_URL = 'https://wrfklddhrtotzremoepp.supabase.co';
 const APP_SUPABASE_KEY = 'sb_publishable_2C7JVxn65eFuauj-fvUQpg_pGwNKnEx';
-// hCaptcha sitekey is stored in your Supabase app_config table
 // ══════════════════════════════════════════════════════════
 
 // ── STATE ──
-let sbClient     = null;
-let currentUser  = null;
-let userProfile  = null;
-let appConfig    = {};
-let txCache      = [];
-let invCache     = [];
-let salaryCache  = { profile: null, components: [] };
-let loginCaptchaId  = null;
-let signupCaptchaId = null;
+let sbClient    = null;
+let currentUser = null;
+let userProfile = null;
+let appConfig   = {};
+let txCache     = [];
+let invCache    = [];
+let salaryCache = { profile: null, components: [] };
+let mfaFactorId = null; // stores factor ID during MFA challenge
 
 // ── CHARTS ──
 let barChart, pieChart, nwChart, invPieChart, eqChart, allocChart;
 
-// ── CONSTANTS ──
+// ── HELPERS ──
 const fmt  = n => '₹' + Math.abs(Math.round(n)).toLocaleString('en-IN');
 const fmtP = n => (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
 
@@ -37,16 +35,8 @@ const TYPE_BADGE = {
   fd:'badge-fixed', rd:'badge-fixed', debt_fund:'badge-debt', bond:'badge-debt', sgb:'badge-gold',
   liquid:'badge-liquid', gold:'badge-gold', real_estate:'badge-re', crypto:'badge-crypto'
 };
-
-// Standard rates for government instruments
-const STANDARD_RATES = {
-  ppf: 7.1,
-  epf: 8.25,
-  nps: null, // market-linked
-  sgb: 2.5   // fixed interest on issue price
-};
-
-const AVATAR_COLORS = ['#185FA5','#1D9E75','#EF9F27','#7F77DD','#E24B4A','#D4537E'];
+const STANDARD_RATES = { ppf:7.1, epf:8.25, sgb:2.5 };
+const AVATAR_COLORS  = ['#185FA5','#1D9E75','#EF9F27','#7F77DD','#E24B4A','#D4537E'];
 
 // ══════════════════════════════════════════════════════════
 //  BOOT
@@ -54,44 +44,95 @@ const AVATAR_COLORS = ['#185FA5','#1D9E75','#EF9F27','#7F77DD','#E24B4A','#D4537
 
 window.addEventListener('load', boot);
 
+function toggleTheme() {
+  const html    = document.documentElement;
+  const current = html.getAttribute('data-theme');
+  // detect effective current theme (manual or system)
+  const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const isDark = current === 'dark' || (!current && systemDark);
+  const next = isDark ? 'light' : 'dark';
+  html.setAttribute('data-theme', next);
+  localStorage.setItem('ft_theme', next);
+  updateThemeBtn(next);
+}
+
+function updateThemeBtn(theme) {
+  const btn = document.getElementById('theme-btn');
+  if (!btn) return;
+  const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  const isDark = theme === 'dark' || (!theme && systemDark);
+  btn.textContent = isDark ? '☀ Light' : '🌙 Dark';
+}
+
 async function boot() {
-  const url = APP_SUPABASE_URL;
-  const key = APP_SUPABASE_KEY;
-  if (!url || url.includes('PASTE_YOUR') || !key || key.includes('PASTE_YOUR')) {
+  // apply saved theme immediately before anything renders
+  const savedTheme = localStorage.getItem('ft_theme');
+  if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+  updateThemeBtn(savedTheme);
+  if (!APP_SUPABASE_URL || APP_SUPABASE_URL.includes('PASTE_YOUR')) {
     showScreen('config'); return;
   }
+  sbClient = window.supabase.createClient(APP_SUPABASE_URL, APP_SUPABASE_KEY);
 
-  // init client FIRST
-  sbClient = window.supabase.createClient(url, key);
-
-  // fetch app_config (hcaptcha sitekey etc.) — fail silently
+  // fetch app config silently
   try {
-    const { data } = await sbClient.from('app_config').select('key, value');
+    const { data } = await sbClient.from('app_config').select('key,value');
     if (data) data.forEach(r => { appConfig[r.key] = r.value; });
-  } catch(e) { console.warn('app_config not ready:', e.message); }
+  } catch(e) { /* table may not exist yet */ }
 
-  // auth
   try {
     const { data: { session } } = await sbClient.auth.getSession();
-    if (session) await onLogin(session.user);
+    if (session) await handleSession(session.user);
     else showScreen('auth');
 
     sbClient.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN' && session) await onLogin(session.user);
-      if (event === 'SIGNED_OUT') { currentUser = null; showScreen('auth'); }
+      if (event === 'SIGNED_IN'  && session) await handleSession(session.user);
+      if (event === 'SIGNED_OUT')           { currentUser = null; showScreen('auth'); }
     });
-  } catch(e) { console.error('Auth boot error:', e); showScreen('auth'); }
+  } catch(e) { console.error(e); showScreen('auth'); }
+}
+
+// ── After successful password auth — check if MFA is needed ──
+async function handleSession(user) {
+  // check assurance level: aal1 = password only, aal2 = MFA verified
+  const { data: { currentLevel } } = await sbClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+  if (currentLevel === 'aal1') {
+    // check if user has any enrolled MFA factors
+    const { data: { totp } } = await sbClient.auth.mfa.listFactors();
+    if (totp && totp.length > 0 && totp[0].status === 'verified') {
+      // MFA enrolled but not yet verified this session — show verify screen
+      mfaFactorId = totp[0].id;
+      showScreen('mfa-verify');
+      return;
+    }
+    // no MFA enrolled — show setup prompt after login
+    await onLogin(user);
+    showScreen('app');
+    const { data: { totp: existingTotp } } = await sbClient.auth.mfa.listFactors();
+    if (!existingTotp || existingTotp.length === 0) {
+      await startMfaSetup(); // prompt to set up MFA
+    }
+    return;
+  }
+
+  // aal2 = fully verified
+  await onLogin(user);
+  showScreen('app');
 }
 
 // ══════════════════════════════════════════════════════════
-//  SCREEN & NAV
+//  SCREENS
 // ══════════════════════════════════════════════════════════
 
 function showScreen(name) {
-  document.getElementById('config-screen').style.display = name === 'config' ? 'flex' : 'none';
-  document.getElementById('auth-screen').style.display   = name === 'auth'   ? 'flex' : 'none';
-  document.getElementById('app-screen').style.display    = name === 'app'    ? 'block' : 'none';
-  if (name === 'auth') initCaptchas();
+  const screens = ['config','auth','mfa-verify','mfa-setup','app'];
+  screens.forEach(s => {
+    const el = document.getElementById(s === 'app' ? 'app-screen' : s + '-screen');
+    if (!el) return;
+    if (s === 'app') el.style.display = name === 'app' ? 'block' : 'none';
+    else el.style.display = name === s ? 'flex' : 'none';
+  });
 }
 
 function showPage(id, btn) {
@@ -100,23 +141,6 @@ function showPage(id, btn) {
   document.getElementById('page-' + id).classList.add('active');
   if (btn) btn.classList.add('active');
   renderAll();
-}
-
-// ══════════════════════════════════════════════════════════
-//  CAPTCHA
-// ══════════════════════════════════════════════════════════
-
-function initCaptchas() {
-  if (!window.hcaptcha) { setTimeout(initCaptchas, 300); return; }
-  const sitekey = appConfig.hcaptcha_sitekey || '10000000-ffff-ffff-ffff-000000000001';
-  try {
-    if (loginCaptchaId !== null)  { window.hcaptcha.reset(loginCaptchaId);  loginCaptchaId  = null; }
-    if (signupCaptchaId !== null) { window.hcaptcha.reset(signupCaptchaId); signupCaptchaId = null; }
-    document.getElementById('login-captcha').innerHTML  = '';
-    document.getElementById('signup-captcha').innerHTML = '';
-    loginCaptchaId  = window.hcaptcha.render('login-captcha',  { sitekey });
-    signupCaptchaId = window.hcaptcha.render('signup-captcha', { sitekey });
-  } catch(e) { console.warn('hCaptcha init error:', e); }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -138,17 +162,11 @@ async function doLogin() {
   const btn   = document.getElementById('login-btn');
   msg.className = 'auth-msg'; msg.style.display = 'none';
   if (!email || !pass) { msg.className='auth-msg error'; msg.textContent='Please enter your email and password.'; return; }
-
-  if (loginCaptchaId !== null && window.hcaptcha) {
-    const token = window.hcaptcha.getResponse(loginCaptchaId);
-    if (!token) { msg.className='auth-msg error'; msg.textContent='Please complete the captcha check first.'; return; }
-  }
-
   btn.innerHTML = '<span class="spinner"></span>Signing in...'; btn.disabled = true;
   const { error } = await sbClient.auth.signInWithPassword({ email, password: pass });
   btn.innerHTML = 'Sign in'; btn.disabled = false;
-  if (window.hcaptcha && loginCaptchaId !== null) window.hcaptcha.reset(loginCaptchaId);
   if (error) { msg.className='auth-msg error'; msg.textContent=error.message; }
+  // on success, onAuthStateChange fires → handleSession handles MFA routing
 }
 
 async function doSignup() {
@@ -159,16 +177,9 @@ async function doSignup() {
   const btn   = document.getElementById('signup-btn');
   if (!name||!email||!pass) { msg.className='auth-msg error'; msg.textContent='Please fill all fields.'; return; }
   if (pass.length < 6) { msg.className='auth-msg error'; msg.textContent='Password must be at least 6 characters.'; return; }
-
-  const captchaToken = window.hcaptcha && signupCaptchaId !== null ? window.hcaptcha.getResponse(signupCaptchaId) : null;
-  if (signupCaptchaId !== null && !captchaToken) { msg.className='auth-msg error'; msg.textContent='Please complete the captcha check first.'; return; }
-
   btn.innerHTML = '<span class="spinner"></span>Creating account...'; btn.disabled = true;
-  const opts = { data: { full_name: name, role: 'member' } };
-  if (captchaToken) opts.captchaToken = captchaToken;
-  const { error } = await sbClient.auth.signUp({ email, password: pass, options: opts });
+  const { error } = await sbClient.auth.signUp({ email, password: pass, options: { data: { full_name: name, role: 'member' } } });
   btn.innerHTML = 'Create account'; btn.disabled = false;
-  if (window.hcaptcha && signupCaptchaId !== null) window.hcaptcha.reset(signupCaptchaId);
   if (error) { msg.className='auth-msg error'; msg.textContent=error.message; }
   else {
     msg.className='auth-msg success';
@@ -181,11 +192,13 @@ async function doForgotPassword() {
   const email = document.getElementById('login-email').value.trim();
   if (!email) { toast('Enter your email first'); return; }
   const { error } = await sbClient.auth.resetPasswordForEmail(email);
-  if (error) toast('Error: ' + error.message);
-  else toast('Password reset email sent!');
+  toast(error ? 'Error: ' + error.message : 'Password reset email sent!');
 }
 
-async function doLogout() { await sbClient.auth.signOut(); }
+async function doLogout() {
+  await sbClient.auth.signOut();
+  mfaFactorId = null;
+}
 
 async function onLogin(user) {
   currentUser = user;
@@ -196,8 +209,152 @@ async function onLogin(user) {
   document.getElementById('inv-date').value = new Date().toISOString().slice(0,10);
   document.getElementById('share-link').value = window.location.href;
   await loadData();
+}
+
+// ══════════════════════════════════════════════════════════
+//  MFA — VERIFY (existing users with MFA enrolled)
+// ══════════════════════════════════════════════════════════
+
+async function doMfaVerify() {
+  const code = document.getElementById('mfa-verify-code').value.trim();
+  const msg  = document.getElementById('mfa-verify-msg');
+  const btn  = document.getElementById('mfa-verify-btn');
+  if (code.length !== 6) { msg.className='auth-msg error'; msg.textContent='Please enter a 6-digit code.'; return; }
+
+  btn.innerHTML = '<span class="spinner"></span>Verifying...'; btn.disabled = true;
+
+  try {
+    // create a challenge
+    const { data: challenge, error: ce } = await sbClient.auth.mfa.challenge({ factorId: mfaFactorId });
+    if (ce) throw ce;
+
+    // verify the challenge
+    const { error: ve } = await sbClient.auth.mfa.verify({
+      factorId:    mfaFactorId,
+      challengeId: challenge.id,
+      code
+    });
+    if (ve) throw ve;
+
+    // success — now aal2, load the app
+    const { data: { user } } = await sbClient.auth.getUser();
+    await onLogin(user);
+    showScreen('app');
+    renderAll();
+  } catch(e) {
+    msg.className='auth-msg error';
+    msg.textContent = e.message?.includes('Invalid') ? 'Incorrect code. Please try again.' : e.message;
+    document.getElementById('mfa-verify-code').value = '';
+  }
+
+  btn.innerHTML = 'Verify'; btn.disabled = false;
+}
+
+// ══════════════════════════════════════════════════════════
+//  MFA — SETUP (new users setting up MFA for the first time)
+// ══════════════════════════════════════════════════════════
+
+async function startMfaSetup() {
+  showScreen('mfa-setup');
+  document.getElementById('mfa-setup-msg').className = 'auth-msg';
+  document.getElementById('mfa-setup-code').value = '';
+
+  try {
+    const { data, error } = await sbClient.auth.mfa.enroll({ factorType: 'totp', issuer: 'FinanceTracker' });
+    if (error) throw error;
+
+    mfaFactorId = data.id;
+
+    // render QR code using a free QR API
+    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(data.totp.uri)}`;
+    document.getElementById('mfa-qr-code').innerHTML = `<img src="${qrUrl}" width="180" height="180" alt="QR Code" style="display:block">`;
+    document.getElementById('mfa-secret-key').textContent = data.totp.secret;
+  } catch(e) {
+    document.getElementById('mfa-setup-msg').className = 'auth-msg error';
+    document.getElementById('mfa-setup-msg').textContent = 'Error generating QR code: ' + e.message;
+  }
+}
+
+async function doMfaSetupVerify() {
+  const code = document.getElementById('mfa-setup-code').value.trim();
+  const msg  = document.getElementById('mfa-setup-msg');
+  const btn  = document.getElementById('mfa-setup-btn');
+  if (code.length !== 6) { msg.className='auth-msg error'; msg.textContent='Please enter the 6-digit code from your app.'; return; }
+
+  btn.innerHTML = '<span class="spinner"></span>Activating...'; btn.disabled = true;
+
+  try {
+    const { data: challenge, error: ce } = await sbClient.auth.mfa.challenge({ factorId: mfaFactorId });
+    if (ce) throw ce;
+
+    const { error: ve } = await sbClient.auth.mfa.verify({
+      factorId:    mfaFactorId,
+      challengeId: challenge.id,
+      code
+    });
+    if (ve) throw ve;
+
+    toast('✓ Two-factor authentication enabled!');
+    showScreen('app');
+    renderAll();
+    renderMfaStatus();
+  } catch(e) {
+    msg.className = 'auth-msg error';
+    msg.textContent = e.message?.includes('Invalid') ? 'Incorrect code. Check your app and try again.' : e.message;
+    document.getElementById('mfa-setup-code').value = '';
+  }
+
+  btn.innerHTML = 'Activate 2FA'; btn.disabled = false;
+}
+
+function skipMfaSetup() {
   showScreen('app');
   renderAll();
+  toast('You can enable 2FA anytime from the Family tab.');
+}
+
+// ══════════════════════════════════════════════════════════
+//  MFA STATUS (shown in Family tab)
+// ══════════════════════════════════════════════════════════
+
+async function renderMfaStatus() {
+  const el = document.getElementById('mfa-status-block');
+  if (!el) return;
+
+  try {
+    const { data: { totp } } = await sbClient.auth.mfa.listFactors();
+    const enrolled = totp && totp.length > 0 && totp[0].status === 'verified';
+
+    if (enrolled) {
+      el.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--green-bg);border-radius:var(--r);border:0.5px solid rgba(29,158,117,.3)">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--green-txt)">2FA is active</div>
+            <div style="font-size:12px;color:var(--green-txt);opacity:.8;margin-top:2px">Your account is protected with an authenticator app</div>
+          </div>
+          <button class="btn btn-sm btn-danger" onclick="disableMfa('${totp[0].id}')">Remove 2FA</button>
+        </div>`;
+    } else {
+      el.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--amber-bg);border-radius:var(--r);border:0.5px solid rgba(239,159,39,.3)">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--amber-txt)">2FA not enabled</div>
+            <div style="font-size:12px;color:var(--amber-txt);opacity:.8;margin-top:2px">Enable for extra account security</div>
+          </div>
+          <button class="btn btn-sm btn-primary" onclick="startMfaSetup()">Enable 2FA</button>
+        </div>`;
+    }
+  } catch(e) {
+    el.innerHTML = `<div style="font-size:13px;color:var(--txt3)">Unable to load 2FA status.</div>`;
+  }
+}
+
+async function disableMfa(factorId) {
+  if (!confirm('Remove two-factor authentication? Your account will be less secure.')) return;
+  const { error } = await sbClient.auth.mfa.unenroll({ factorId });
+  if (error) { toast('Error: ' + error.message); return; }
+  toast('2FA removed');
+  renderMfaStatus();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -214,7 +371,7 @@ async function loadData() {
   ]);
   txCache  = txs   || [];
   invCache = invs  || [];
-  salaryCache.profile    = sal  || null;
+  salaryCache.profile    = sal   || null;
   salaryCache.components = comps || [];
 }
 
@@ -232,7 +389,7 @@ async function saveTx() {
   btn.innerHTML = 'Save'; btn.disabled = false;
   if (error) { toast('Error: ' + error.message); return; }
   document.getElementById('tx-amount').value = '';
-  document.getElementById('tx-note').value = '';
+  document.getElementById('tx-note').value   = '';
   toast('✓ Transaction saved');
   await loadData(); renderAll();
 }
@@ -254,10 +411,7 @@ async function saveInv() {
   const date     = document.getElementById('inv-date').value;
   const maturity = document.getElementById('inv-maturity').value || null;
   if (!name || !amount || amount <= 0) { toast('Enter name and invested amount'); return; }
-
-  // collect extra fields
   const extras = collectExtraFields(type);
-
   const btn = document.getElementById('inv-save-btn');
   btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true;
   const { error } = await sbClient.from('investments').insert({
@@ -270,9 +424,8 @@ async function saveInv() {
   });
   btn.innerHTML = 'Save holding'; btn.disabled = false;
   if (error) { toast('Error: ' + error.message); return; }
-  // clear fields
   ['inv-name','inv-amount','inv-current','inv-units','inv-avgprice'].forEach(id => document.getElementById(id).value = '');
-  document.getElementById('inv-maturity').value = '';
+  document.getElementById('inv-maturity').value        = '';
   document.getElementById('inv-extra-fields').innerHTML = '';
   toast('✓ Holding saved');
   await loadData(); renderAll();
@@ -286,12 +439,11 @@ async function deleteInv(id) {
 
 // ── SALARY ──
 async function saveSalaryProfile() {
-  const employer     = document.getElementById('sal-employer').value.trim();
-  const designation  = document.getElementById('sal-designation').value.trim();
-  const frequency    = document.getElementById('sal-frequency').value;
-  const fy           = document.getElementById('sal-fy').value;
+  const employer    = document.getElementById('sal-employer').value.trim();
+  const designation = document.getElementById('sal-designation').value.trim();
+  const frequency   = document.getElementById('sal-frequency').value;
+  const fy          = document.getElementById('sal-fy').value;
   const uid = currentUser.id;
-
   if (salaryCache.profile) {
     await sbClient.from('salary_profiles').update({ employer, designation, frequency, financial_year: fy }).eq('user_id', uid);
   } else {
@@ -303,28 +455,22 @@ async function saveSalaryProfile() {
 
 async function saveComponent(kind) {
   const isEarning = kind === 'earning';
-  const nameEl    = document.getElementById(isEarning ? 'comp-earn-name'    : 'comp-ded-name');
-  const amountEl  = document.getElementById(isEarning ? 'comp-earn-amount'  : 'comp-ded-amount');
-  const noteEl    = document.getElementById(isEarning ? 'comp-earn-note'    : 'comp-ded-note');
-  const extraEl   = document.getElementById(isEarning ? 'comp-earn-taxable' : 'comp-ded-section');
-
+  const nameEl   = document.getElementById(isEarning ? 'comp-earn-name'    : 'comp-ded-name');
+  const amtEl    = document.getElementById(isEarning ? 'comp-earn-amount'  : 'comp-ded-amount');
+  const noteEl   = document.getElementById(isEarning ? 'comp-earn-note'    : 'comp-ded-note');
+  const extraEl  = document.getElementById(isEarning ? 'comp-earn-taxable' : 'comp-ded-section');
   const name   = nameEl.value.trim();
-  const amount = parseFloat(amountEl.value);
-  const note   = noteEl.value.trim();
-  const extra  = extraEl.value;
-
+  const amount = parseFloat(amtEl.value);
   if (!name || !amount || amount <= 0) { toast('Enter name and amount'); return; }
-
-  const row = {
-    user_id: currentUser.id, kind, name, amount_monthly: amount, note,
-    taxable: isEarning ? extra : null,
-    section: !isEarning ? extra : null
-  };
-
-  const { error } = await sbClient.from('salary_components').insert(row);
+  const { error } = await sbClient.from('salary_components').insert({
+    user_id: currentUser.id, kind, name, amount_monthly: amount,
+    note: noteEl.value.trim(),
+    taxable: isEarning ? extraEl.value : null,
+    section: !isEarning ? extraEl.value : null
+  });
   if (error) { toast('Error: ' + error.message); return; }
   toast('✓ Component saved');
-  nameEl.value = ''; amountEl.value = ''; noteEl.value = '';
+  nameEl.value = ''; amtEl.value = ''; noteEl.value = '';
   cancelComponent(kind);
   await loadData(); renderSalary();
 }
@@ -340,58 +486,17 @@ async function deleteSalaryComponent(id) {
 // ══════════════════════════════════════════════════════════
 
 const EXTRA_FIELDS = {
-  fd: [
-    { id:'rate',    label:'Interest rate (%/yr)', type:'number', placeholder:'e.g. 7.5', step:'0.01' },
-    { id:'tenure',  label:'Tenure (months)',       type:'number', placeholder:'e.g. 12' },
-    { id:'bank',    label:'Bank / Institution',    type:'text',   placeholder:'e.g. SBI, HDFC' },
-    { id:'compound',label:'Compounding',           type:'select', options:['Quarterly','Monthly','Half-yearly','Annually','Simple Interest'] }
-  ],
-  rd: [
-    { id:'rate',       label:'Interest rate (%/yr)',  type:'number', placeholder:'e.g. 7.0', step:'0.01' },
-    { id:'monthly_dep',label:'Monthly deposit (₹)',   type:'number', placeholder:'e.g. 5000' },
-    { id:'tenure',     label:'Tenure (months)',        type:'number', placeholder:'e.g. 24' },
-    { id:'bank',       label:'Bank / Institution',     type:'text',   placeholder:'e.g. Post Office' }
-  ],
-  ppf: [
-    { id:'rate',        label:'Interest rate (%/yr)', type:'number', placeholder:'7.1', value:'7.1', step:'0.01' },
-    { id:'yearly_dep',  label:'Yearly deposit (₹)',   type:'number', placeholder:'e.g. 150000' },
-    { id:'account_no',  label:'Account number',       type:'text',   placeholder:'Optional' },
-    { id:'bank',        label:'Bank / Post office',   type:'text',   placeholder:'e.g. SBI' }
-  ],
-  epf: [
-    { id:'rate',        label:'Interest rate (%/yr)', type:'number', placeholder:'8.25', value:'8.25', step:'0.01' },
-    { id:'employee_contrib', label:'Employee contrib/month (₹)', type:'number', placeholder:'e.g. 1800' },
-    { id:'employer_contrib', label:'Employer contrib/month (₹)', type:'number', placeholder:'e.g. 1800' },
-    { id:'uan',         label:'UAN number',           type:'text',   placeholder:'Optional' }
-  ],
-  nps: [
-    { id:'tier',       label:'Tier',                  type:'select', options:['Tier I','Tier II'] },
-    { id:'pran',       label:'PRAN number',           type:'text',   placeholder:'Optional' },
-    { id:'fund_mgr',   label:'Fund manager',          type:'text',   placeholder:'e.g. SBI Pension Funds' },
-    { id:'monthly_contrib', label:'Monthly contribution (₹)', type:'number', placeholder:'e.g. 5000' }
-  ],
-  bond: [
-    { id:'rate',       label:'Coupon rate (%/yr)',    type:'number', placeholder:'e.g. 8.0', step:'0.01' },
-    { id:'face_value', label:'Face value (₹)',        type:'number', placeholder:'e.g. 1000' },
-    { id:'issuer',     label:'Issuer',                type:'text',   placeholder:'e.g. RBI, NHAI' },
-    { id:'isin',       label:'ISIN',                  type:'text',   placeholder:'Optional' }
-  ],
-  sgb: [
-    { id:'rate',       label:'Interest rate (%/yr)', type:'number', placeholder:'2.5', value:'2.5', step:'0.01' },
-    { id:'grams',      label:'Quantity (grams)',      type:'number', placeholder:'e.g. 10', step:'0.001' },
-    { id:'series',     label:'Series',               type:'text',   placeholder:'e.g. SGB 2023-24 Series I' },
-    { id:'issue_price',label:'Issue price/gram (₹)', type:'number', placeholder:'e.g. 5900' }
-  ],
-  us_stock:     [{ id:'ticker', label:'Exchange',    type:'select', options:['NYSE','NASDAQ','AMEX'] }],
-  indian_stock: [{ id:'exchange', label:'Exchange',  type:'select', options:['NSE','BSE'] }],
-  mutual_fund:  [
-    { id:'folio',    label:'Folio number',  type:'text',   placeholder:'Optional' },
-    { id:'category', label:'Fund category', type:'select', options:['Large Cap','Mid Cap','Small Cap','Flexi Cap','ELSS','Index','Sectoral','International'] }
-  ],
-  gold: [
-    { id:'grams',  label:'Quantity (grams)', type:'number', placeholder:'e.g. 10', step:'0.001' },
-    { id:'form',   label:'Form',             type:'select', options:['Coin','Bar','Jewellery','ETF'] }
-  ]
+  fd:  [{id:'rate',label:'Interest rate (%/yr)',type:'number',placeholder:'e.g. 7.5',step:'0.01'},{id:'tenure',label:'Tenure (months)',type:'number',placeholder:'e.g. 12'},{id:'bank',label:'Bank / Institution',type:'text',placeholder:'e.g. SBI'},{id:'compound',label:'Compounding',type:'select',options:['Quarterly','Monthly','Half-yearly','Annually','Simple Interest']}],
+  rd:  [{id:'rate',label:'Interest rate (%/yr)',type:'number',placeholder:'e.g. 7.0',step:'0.01'},{id:'monthly_dep',label:'Monthly deposit (₹)',type:'number',placeholder:'e.g. 5000'},{id:'tenure',label:'Tenure (months)',type:'number',placeholder:'e.g. 24'},{id:'bank',label:'Bank / Institution',type:'text',placeholder:'e.g. Post Office'}],
+  ppf: [{id:'rate',label:'Interest rate (%/yr)',type:'number',placeholder:'7.1',value:'7.1',step:'0.01'},{id:'yearly_dep',label:'Yearly deposit (₹)',type:'number',placeholder:'e.g. 150000'},{id:'bank',label:'Bank / Post office',type:'text',placeholder:'e.g. SBI'},{id:'account_no',label:'Account number',type:'text',placeholder:'Optional'}],
+  epf: [{id:'rate',label:'Interest rate (%/yr)',type:'number',placeholder:'8.25',value:'8.25',step:'0.01'},{id:'employee_contrib',label:'Employee contrib/mo (₹)',type:'number',placeholder:'e.g. 1800'},{id:'employer_contrib',label:'Employer contrib/mo (₹)',type:'number',placeholder:'e.g. 1800'},{id:'uan',label:'UAN number',type:'text',placeholder:'Optional'}],
+  nps: [{id:'tier',label:'Tier',type:'select',options:['Tier I','Tier II']},{id:'fund_mgr',label:'Fund manager',type:'text',placeholder:'e.g. SBI Pension Funds'},{id:'monthly_contrib',label:'Monthly contribution (₹)',type:'number',placeholder:'e.g. 5000'},{id:'pran',label:'PRAN number',type:'text',placeholder:'Optional'}],
+  bond:[{id:'rate',label:'Coupon rate (%/yr)',type:'number',placeholder:'e.g. 8.0',step:'0.01'},{id:'face_value',label:'Face value (₹)',type:'number',placeholder:'e.g. 1000'},{id:'issuer',label:'Issuer',type:'text',placeholder:'e.g. RBI, NHAI'},{id:'isin',label:'ISIN',type:'text',placeholder:'Optional'}],
+  sgb: [{id:'rate',label:'Interest rate (%/yr)',type:'number',placeholder:'2.5',value:'2.5',step:'0.01'},{id:'grams',label:'Quantity (grams)',type:'number',placeholder:'e.g. 10',step:'0.001'},{id:'series',label:'Series',type:'text',placeholder:'e.g. SGB 2023-24 Series I'},{id:'issue_price',label:'Issue price/gram (₹)',type:'number',placeholder:'e.g. 5900'}],
+  us_stock:    [{id:'ticker',label:'Exchange',type:'select',options:['NYSE','NASDAQ','AMEX']}],
+  indian_stock:[{id:'exchange',label:'Exchange',type:'select',options:['NSE','BSE']}],
+  mutual_fund: [{id:'folio',label:'Folio number',type:'text',placeholder:'Optional'},{id:'category',label:'Fund category',type:'select',options:['Large Cap','Mid Cap','Small Cap','Flexi Cap','ELSS','Index','Sectoral','International']}],
+  gold:        [{id:'grams',label:'Quantity (grams)',type:'number',placeholder:'e.g. 10',step:'0.001'},{id:'form',label:'Form',type:'select',options:['Coin','Bar','Jewellery','ETF']}]
 };
 
 function toggleInvFields() {
@@ -399,61 +504,49 @@ function toggleInvFields() {
   const container = document.getElementById('inv-extra-fields');
   const fields = EXTRA_FIELDS[type];
   if (!fields || fields.length === 0) { container.innerHTML = ''; return; }
-
   container.innerHTML = `
     <div style="margin:8px 0 4px;font-size:12px;font-weight:700;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px">
-      ${TYPE_LABELS[type] || type} details
+      ${TYPE_LABELS[type]||type} details
       ${STANDARD_RATES[type] ? `<span style="margin-left:8px;background:var(--blue-bg);color:var(--blue-txt);padding:2px 8px;border-radius:10px;font-size:11px">Standard rate: ${STANDARD_RATES[type]}% p.a.</span>` : ''}
     </div>
-    <div class="form-row" id="extra-fields-row"></div>
-  `;
-
+    <div class="form-row" id="extra-fields-row"></div>`;
   const row = document.getElementById('extra-fields-row');
   fields.forEach(f => {
     const div = document.createElement('div');
     div.className = 'form-group-inline';
     div.style.minWidth = '140px';
     if (f.type === 'select') {
-      div.innerHTML = `<label>${f.label}</label>
-        <select id="extra-${f.id}">${f.options.map(o=>`<option>${o}</option>`).join('')}</select>`;
+      div.innerHTML = `<label>${f.label}</label><select id="extra-${f.id}">${f.options.map(o=>`<option>${o}</option>`).join('')}</select>`;
     } else {
-      div.innerHTML = `<label>${f.label}</label>
-        <input type="${f.type}" id="extra-${f.id}" placeholder="${f.placeholder||''}" 
-          ${f.step?`step="${f.step}"`:''}
-          ${f.value?`value="${f.value}"`:''}
-          min="0">`;
+      div.innerHTML = `<label>${f.label}</label><input type="${f.type}" id="extra-${f.id}" placeholder="${f.placeholder||''}" ${f.step?`step="${f.step}"`:''}${f.value?` value="${f.value}"`:''}  min="0">`;
     }
     row.appendChild(div);
   });
 }
 
 function collectExtraFields(type) {
-  const fields = EXTRA_FIELDS[type];
-  if (!fields) return {};
+  const fields = EXTRA_FIELDS[type]; if (!fields) return {};
   const result = {};
-  fields.forEach(f => {
-    const el = document.getElementById('extra-' + f.id);
-    if (el) result[f.id] = el.value;
-  });
+  fields.forEach(f => { const el = document.getElementById('extra-'+f.id); if (el) result[f.id] = el.value; });
   return result;
 }
 
 function formatExtraDetails(type, extra) {
   if (!extra || Object.keys(extra).length === 0) return '—';
   const parts = [];
-  if (extra.rate)          parts.push(`${extra.rate}% p.a.`);
-  if (extra.bank)          parts.push(extra.bank);
-  if (extra.tenure)        parts.push(`${extra.tenure}mo`);
-  if (extra.grams)         parts.push(`${extra.grams}g`);
-  if (extra.series)        parts.push(extra.series);
-  if (extra.tier)          parts.push(extra.tier);
-  if (extra.category)      parts.push(extra.category);
-  if (extra.exchange)      parts.push(extra.exchange);
-  if (extra.compound)      parts.push(extra.compound);
-  if (extra.fund_mgr)      parts.push(extra.fund_mgr);
+  if (extra.rate)           parts.push(`${extra.rate}% p.a.`);
+  if (extra.bank)           parts.push(extra.bank);
+  if (extra.tenure)         parts.push(`${extra.tenure}mo`);
+  if (extra.grams)          parts.push(`${extra.grams}g`);
+  if (extra.series)         parts.push(extra.series);
+  if (extra.tier)           parts.push(extra.tier);
+  if (extra.category)       parts.push(extra.category);
+  if (extra.exchange||extra.ticker) parts.push(extra.exchange||extra.ticker);
+  if (extra.compound)       parts.push(extra.compound);
+  if (extra.fund_mgr)       parts.push(extra.fund_mgr);
   if (extra.monthly_contrib) parts.push(`₹${Number(extra.monthly_contrib).toLocaleString('en-IN')}/mo`);
-  if (extra.monthly_dep)   parts.push(`₹${Number(extra.monthly_dep).toLocaleString('en-IN')}/mo`);
-  if (extra.yearly_dep)    parts.push(`₹${Number(extra.yearly_dep).toLocaleString('en-IN')}/yr`);
+  if (extra.monthly_dep)    parts.push(`₹${Number(extra.monthly_dep).toLocaleString('en-IN')}/mo`);
+  if (extra.yearly_dep)     parts.push(`₹${Number(extra.yearly_dep).toLocaleString('en-IN')}/yr`);
   return parts.join(' · ') || '—';
 }
 
@@ -461,15 +554,11 @@ function formatExtraDetails(type, extra) {
 //  SALARY COMPONENT UI
 // ══════════════════════════════════════════════════════════
 
-function addComponent(kind) {
-  document.getElementById(`add-${kind}-form`).style.display = 'block';
-}
-function cancelComponent(kind) {
-  document.getElementById(`add-${kind}-form`).style.display = 'none';
-}
+function addComponent(kind)    { document.getElementById(`add-${kind}-form`).style.display = 'block'; }
+function cancelComponent(kind) { document.getElementById(`add-${kind}-form`).style.display = 'none'; }
 
 // ══════════════════════════════════════════════════════════
-//  RENDER ALL
+//  RENDER
 // ══════════════════════════════════════════════════════════
 
 function renderAll() {
@@ -508,18 +597,14 @@ function renderDashboard() {
     document.getElementById('nw-stats').innerHTML = `
       <div class="nw-stat"><div class="nw-label">Income</div><div style="font-size:17px;font-weight:700">${fmt(income)}</div></div>
       <div class="nw-stat"><div class="nw-label">Expenses</div><div style="font-size:17px;font-weight:700">${fmt(expenses)}</div></div>
-      <div class="nw-stat"><div class="nw-label">Savings rate</div><div style="font-size:17px;font-weight:700">${savRate.toFixed(1)}%</div></div>
-    `;
+      <div class="nw-stat"><div class="nw-label">Savings rate</div><div style="font-size:17px;font-weight:700">${savRate.toFixed(1)}%</div></div>`;
   }
-
   const sc = document.getElementById('summary-cards');
   if (sc) sc.innerHTML = `
     <div class="metric-card"><div class="metric-label">Income</div><div class="metric-value c-green">${fmt(income)}</div></div>
     <div class="metric-card"><div class="metric-label">Expenses</div><div class="metric-value c-red">${fmt(expenses)}</div></div>
     <div class="metric-card"><div class="metric-label">Savings</div><div class="metric-value c-blue">${fmt(savings)}</div><div class="metric-sub">Rate: ${savRate.toFixed(1)}%</div></div>
-    <div class="metric-card"><div class="metric-label">Portfolio</div><div class="metric-value">${fmt(totalInv)}</div><div class="metric-sub">${invCache.length} holdings</div></div>
-  `;
-
+    <div class="metric-card"><div class="metric-label">Portfolio</div><div class="metric-value">${fmt(totalInv)}</div><div class="metric-sub">${invCache.length} holdings</div></div>`;
   renderDashCharts(tx);
   renderQuickInsights();
 }
@@ -529,11 +614,10 @@ function renderDashCharts(tx) {
   const incM=Array(12).fill(0), expM=Array(12).fill(0), savM=Array(12).fill(0);
   txCache.forEach(t => {
     const m = new Date(t.date).getMonth();
-    if (t.type==='income') incM[m]+=Number(t.amount);
-    if (t.type==='expense') expM[m]+=Number(t.amount);
-    if (t.type==='saving') savM[m]+=Number(t.amount);
+    if(t.type==='income')  incM[m]+=Number(t.amount);
+    if(t.type==='expense') expM[m]+=Number(t.amount);
+    if(t.type==='saving')  savM[m]+=Number(t.amount);
   });
-
   const barCtx = document.getElementById('chart-bar');
   if (barCtx) {
     if (barChart) barChart.destroy();
@@ -543,31 +627,28 @@ function renderDashCharts(tx) {
       {label:'Savings', data:savM, backgroundColor:'#185FA555', borderColor:'#185FA5', borderWidth:1, borderRadius:4}
     ]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
       scales:{ x:{grid:{display:false}}, y:{grid:{color:'rgba(0,0,0,0.04)'},
-        ticks:{callback:v=>v>=1e5?'₹'+(v/1e5).toFixed(0)+'L':v>=1e3?'₹'+(v/1e3).toFixed(0)+'K':'₹'+v}}} }
-    });
+        ticks:{callback:v=>v>=1e5?'₹'+(v/1e5).toFixed(0)+'L':v>=1e3?'₹'+(v/1e3).toFixed(0)+'K':'₹'+v}}}}});
   }
-
   const cats={};
   tx.filter(t=>t.type==='expense').forEach(t=>{cats[t.category]=(cats[t.category]||0)+Number(t.amount)});
   const cL=Object.keys(cats), cV=Object.values(cats);
   const cC=['#378ADD','#1D9E75','#EF9F27','#E24B4A','#7F77DD','#D4537E','#BA7517','#5DCAA5','#F09995','#9FE1CB'];
-  const pieCtx=document.getElementById('chart-pie');
+  const pieCtx = document.getElementById('chart-pie');
   if (pieCtx && cL.length>0) {
     if (pieChart) pieChart.destroy();
-    pieChart=new Chart(pieCtx,{type:'doughnut',data:{labels:cL,datasets:[{data:cV,backgroundColor:cC.slice(0,cL.length),borderWidth:0}]},
+    pieChart = new Chart(pieCtx,{type:'doughnut',data:{labels:cL,datasets:[{data:cV,backgroundColor:cC.slice(0,cL.length),borderWidth:0}]},
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},cutout:'62%'}});
     const tot=cV.reduce((a,b)=>a+b,0);
     document.getElementById('legend-cat').innerHTML=cL.map((l,i)=>`<span class="legend-item"><span class="legend-dot" style="background:${cC[i%cC.length]}"></span>${l} ${tot>0?(cV[i]/tot*100).toFixed(0):0}%</span>`).join('');
   }
-
-  const nwCtx=document.getElementById('chart-nw');
+  const nwCtx = document.getElementById('chart-nw');
   if (nwCtx && txCache.length>0) {
     const sorted=[...txCache].sort((a,b)=>new Date(a.date)-new Date(b.date));
     let run=0, nwL=[], nwV=[];
     sorted.forEach(t=>{
-      if(t.type==='income') run+=Number(t.amount);
+      if(t.type==='income')  run+=Number(t.amount);
       if(t.type==='expense') run-=Number(t.amount);
-      if(t.type==='saving') run+=Number(t.amount);
+      if(t.type==='saving')  run+=Number(t.amount);
       nwL.push(t.date.slice(5)); nwV.push(Math.round(run));
     });
     if(nwChart) nwChart.destroy();
@@ -581,7 +662,7 @@ function renderDashCharts(tx) {
 // ── TRANSACTIONS ──
 function renderTransactions() {
   const tbody=document.getElementById('tx-table'), empty=document.getElementById('tx-empty');
-  if (!tbody) return;
+  if(!tbody) return;
   const srch=(document.getElementById('tx-search')?.value||'').toLowerCase();
   const tf=document.getElementById('tx-type-filter')?.value||'all';
   const txs=txCache.filter(t=>{
@@ -602,7 +683,6 @@ function renderTransactions() {
 
 // ── SALARY ──
 function renderSalary() {
-  // pre-fill profile fields
   if (salaryCache.profile) {
     const p = salaryCache.profile;
     document.getElementById('sal-employer').value    = p.employer    || '';
@@ -610,96 +690,79 @@ function renderSalary() {
     document.getElementById('sal-frequency').value   = p.frequency   || 'monthly';
     document.getElementById('sal-fy').value          = p.financial_year || '2025-26';
   }
-
-  const comps = salaryCache.components;
+  const comps      = salaryCache.components;
   const earnings   = comps.filter(c=>c.kind==='earning');
   const deductions = comps.filter(c=>c.kind==='deduction');
-
   const earningTotal   = earnings.reduce((s,c)=>s+Number(c.amount_monthly),0);
   const deductionTotal = deductions.reduce((s,c)=>s+Number(c.amount_monthly),0);
   const netSalary      = earningTotal - deductionTotal;
 
-  // render earnings list
   const earEl = document.getElementById('earnings-list');
-  if (earEl) {
-    if (earnings.length===0) { earEl.innerHTML='<div style="color:var(--txt3);font-size:13px;padding:8px 0">No earnings added yet.</div>'; }
-    else earEl.innerHTML = earnings.map(c=>`
-      <div class="salary-component-row">
+  if(earEl) earEl.innerHTML = earnings.length===0
+    ? '<div style="color:var(--txt3);font-size:13px;padding:8px 0">No earnings added yet.</div>'
+    : earnings.map(c=>`<div class="salary-component-row">
         <div class="comp-name">${c.name}</div>
         <div><span class="comp-tag comp-earning">${c.taxable==='no'?'Exempt':c.taxable==='partial'?'Partial':''}</span></div>
         <div style="font-size:11px;color:var(--txt3);flex:2">${c.note||''}</div>
         <div class="comp-amount c-green">${fmt(c.amount_monthly)}<span style="font-size:10px;font-weight:400">/mo</span></div>
         <button class="btn btn-sm btn-danger" onclick="deleteSalaryComponent(${c.id})" style="margin-left:8px">✕</button>
       </div>`).join('');
-  }
 
-  // render deductions list
   const dedEl = document.getElementById('deductions-list');
-  if (dedEl) {
-    if (deductions.length===0) { dedEl.innerHTML='<div style="color:var(--txt3);font-size:13px;padding:8px 0">No deductions added yet.</div>'; }
-    else dedEl.innerHTML = deductions.map(c=>`
-      <div class="salary-component-row">
+  if(dedEl) dedEl.innerHTML = deductions.length===0
+    ? '<div style="color:var(--txt3);font-size:13px;padding:8px 0">No deductions added yet.</div>'
+    : deductions.map(c=>`<div class="salary-component-row">
         <div class="comp-name">${c.name}</div>
         <div><span class="comp-tag comp-deduction">${c.section||''}</span></div>
         <div style="font-size:11px;color:var(--txt3);flex:2">${c.note||''}</div>
         <div class="comp-amount c-red">${fmt(c.amount_monthly)}<span style="font-size:10px;font-weight:400">/mo</span></div>
         <button class="btn btn-sm btn-danger" onclick="deleteSalaryComponent(${c.id})" style="margin-left:8px">✕</button>
       </div>`).join('');
-  }
 
-  // salary summary
   const sumEl = document.getElementById('salary-summary');
-  if (sumEl) {
-    const section80C = deductions.filter(c=>c.section==='80C').reduce((s,c)=>s+Number(c.amount_monthly)*12,0);
-    const section80D = deductions.filter(c=>c.section==='80D').reduce((s,c)=>s+Number(c.amount_monthly)*12,0);
-    const tds        = deductions.filter(c=>c.section==='TDS').reduce((s,c)=>s+Number(c.amount_monthly),0);
-
+  if(sumEl) {
+    const s80C = deductions.filter(c=>c.section==='80C').reduce((s,c)=>s+Number(c.amount_monthly)*12,0);
+    const s80D = deductions.filter(c=>c.section==='80D').reduce((s,c)=>s+Number(c.amount_monthly)*12,0);
+    const tds  = deductions.filter(c=>c.section==='TDS').reduce((s,c)=>s+Number(c.amount_monthly),0);
     sumEl.innerHTML = `
       <div class="grid3" style="margin-bottom:16px">
         <div class="metric-card"><div class="metric-label">Gross earnings/mo</div><div class="metric-value c-green">${fmt(earningTotal)}</div><div class="metric-sub">${fmt(earningTotal*12)}/yr</div></div>
         <div class="metric-card"><div class="metric-label">Total deductions/mo</div><div class="metric-value c-red">${fmt(deductionTotal)}</div><div class="metric-sub">${fmt(deductionTotal*12)}/yr</div></div>
         <div class="metric-card"><div class="metric-label">Net take-home/mo</div><div class="metric-value">${fmt(netSalary)}</div><div class="metric-sub">${fmt(netSalary*12)}/yr</div></div>
       </div>
-      ${section80C>0||section80D>0||tds>0 ? `
+      ${s80C>0||s80D>0||tds>0?`
       <div style="font-size:12px;font-weight:700;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Tax summary</div>
       <div class="grid3">
-        ${section80C>0?`<div class="metric-card"><div class="metric-label">80C investments/yr</div><div class="metric-value c-blue">${fmt(section80C)}</div><div class="metric-sub">Limit: ₹1,50,000</div></div>`:''}
-        ${section80D>0?`<div class="metric-card"><div class="metric-label">80D premium/yr</div><div class="metric-value c-blue">${fmt(section80D)}</div><div class="metric-sub">Limit: ₹25,000–50,000</div></div>`:''}
+        ${s80C>0?`<div class="metric-card"><div class="metric-label">80C investments/yr</div><div class="metric-value c-blue">${fmt(s80C)}</div><div class="metric-sub">Limit: ₹1,50,000</div></div>`:''}
+        ${s80D>0?`<div class="metric-card"><div class="metric-label">80D premium/yr</div><div class="metric-value c-blue">${fmt(s80D)}</div><div class="metric-sub">Limit: ₹25,000–50,000</div></div>`:''}
         ${tds>0?`<div class="metric-card"><div class="metric-label">TDS/mo</div><div class="metric-value c-amber">${fmt(tds)}</div><div class="metric-sub">${fmt(tds*12)}/yr</div></div>`:''}
-      </div>` : ''}
-    `;
+      </div>`:''}`;
   }
 }
 
 // ── INVESTMENTS ──
 function renderInvestments() {
   const tbody=document.getElementById('inv-table'), empty=document.getElementById('inv-empty');
-  if (!tbody) return;
+  if(!tbody) return;
   const srch=(document.getElementById('inv-search')?.value||'').toLowerCase();
   const invs=invCache.filter(i=>i.name.toLowerCase().includes(srch)||(TYPE_LABELS[i.asset_type]||'').toLowerCase().includes(srch));
-
   if(invs.length===0){tbody.innerHTML='';if(empty)empty.style.display='block';}
   else {
     if(empty)empty.style.display='none';
     tbody.innerHTML=invs.map(i=>{
       const pnl=Number(i.current_value)-Number(i.amount_invested);
       const pct=Number(i.amount_invested)>0?pnl/Number(i.amount_invested)*100:0;
-      const extra = i.extra_data || {};
       return `<tr>
-        <td><div class="holding-name">${i.name}</div>
-          <div class="holding-meta">${i.units>0?i.units+' units':''} ${i.avg_price>0?'· avg ₹'+i.avg_price:''} ${i.purchase_date?'· '+i.purchase_date:''}</div>
-        </td>
+        <td><div class="holding-name">${i.name}</div><div class="holding-meta">${i.units>0?i.units+' units':''} ${i.avg_price>0?'· avg ₹'+i.avg_price:''} ${i.purchase_date?'· '+i.purchase_date:''}</div></td>
         <td><span class="badge ${TYPE_BADGE[i.asset_type]||'badge-in'}">${TYPE_LABELS[i.asset_type]||i.asset_type}</span></td>
-        <td style="font-size:12px;color:var(--txt2)">${formatExtraDetails(i.asset_type, extra)}</td>
-        <td>${fmt(i.amount_invested)}</td>
-        <td>${fmt(i.current_value)}</td>
+        <td style="font-size:12px;color:var(--txt2)">${formatExtraDetails(i.asset_type,i.extra_data||{})}</td>
+        <td>${fmt(i.amount_invested)}</td><td>${fmt(i.current_value)}</td>
         <td style="text-align:right;font-weight:700;color:${pnl>=0?'var(--green)':'var(--red)'}">${pnl>=0?'+':''}${fmt(pnl)}</td>
         <td style="text-align:right;color:${pct>=0?'var(--green)':'var(--red)'}">${fmtP(pct)}</td>
         <td><button class="btn btn-sm btn-danger" onclick="deleteInv(${i.id})">✕</button></td>
       </tr>`;
     }).join('');
   }
-
   const totalV=invCache.reduce((s,i)=>s+Number(i.current_value),0);
   const totalA=invCache.reduce((s,i)=>s+Number(i.amount_invested),0);
   const pnl=totalV-totalA, pct=totalA>0?pnl/totalA*100:0;
@@ -708,15 +771,13 @@ function renderInvestments() {
     <div class="metric-card"><div class="metric-label">Invested</div><div class="metric-value">${fmt(totalA)}</div></div>
     <div class="metric-card"><div class="metric-label">Current value</div><div class="metric-value">${fmt(totalV)}</div></div>
     <div class="metric-card"><div class="metric-label">P&L</div><div class="metric-value ${pnl>=0?'c-green':'c-red'}">${pnl>=0?'+':''}${fmt(pnl)}</div><div class="metric-sub">${fmtP(pct)}</div></div>
-    <div class="metric-card"><div class="metric-label">Holdings</div><div class="metric-value">${invCache.length}</div></div>
-  `;
+    <div class="metric-card"><div class="metric-label">Holdings</div><div class="metric-value">${invCache.length}</div></div>`;
   renderInvCharts(totalV);
 }
 
 function renderInvCharts(total) {
   const byType={};
   invCache.forEach(i=>{byType[i.asset_type]=(byType[i.asset_type]||0)+Number(i.current_value)});
-
   const invCtx=document.getElementById('chart-inv-pie'), legInv=document.getElementById('legend-inv');
   if(invCtx && invCache.length>0){
     const entries=Object.entries(byType).filter(([,v])=>v>0);
@@ -727,7 +788,6 @@ function renderInvCharts(total) {
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},cutout:'60%'}});
     if(legInv) legInv.innerHTML=labels.map((l,i)=>`<span class="legend-item"><span class="legend-dot" style="background:${cols[i%cols.length]}"></span>${l} ${total>0?(vals[i]/total*100).toFixed(1):0}%</span>`).join('');
   }
-
   const eqCtx=document.getElementById('chart-eq-split'), legEq=document.getElementById('legend-eq');
   if(eqCtx){
     const us=byType.us_stock||0, indian=byType.indian_stock||0, mf=byType.mutual_fund||0;
@@ -750,47 +810,40 @@ function renderAllocation() {
   const total=invCache.reduce((s,i)=>s+Number(i.current_value),0);
   const byType={};
   invCache.forEach(i=>{byType[i.asset_type]=(byType[i.asset_type]||0)+Number(i.current_value)});
-
-  const equity = (byType.us_stock||0)+(byType.indian_stock||0)+(byType.mutual_fund||0);
-  const debt   = (byType.ppf||0)+(byType.epf||0)+(byType.nps||0)+(byType.bond||0)+(byType.debt_fund||0);
-  const fixed  = (byType.fd||0)+(byType.rd||0);
-  const liquid = byType.liquid||0;
-  const gold   = (byType.gold||0)+(byType.sgb||0);
-  const re     = byType.real_estate||0;
-  const crypto = byType.crypto||0;
+  const equity=(byType.us_stock||0)+(byType.indian_stock||0)+(byType.mutual_fund||0);
+  const debt=(byType.ppf||0)+(byType.epf||0)+(byType.nps||0)+(byType.bond||0)+(byType.debt_fund||0);
+  const fixed=(byType.fd||0)+(byType.rd||0);
+  const liquid=byType.liquid||0, gold=(byType.gold||0)+(byType.sgb||0), re=byType.real_estate||0, crypto=byType.crypto||0;
 
   function prog(label,val,color,note=''){
     const pct=total>0?val/total*100:0;
-    return `<div class="progress-wrap">
-      <div class="progress-header"><span class="progress-label">${label}</span><span class="progress-value">${fmt(val)} <strong>${pct.toFixed(1)}%</strong></span></div>
-      <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${color}"></div></div>
-      ${note?`<div style="font-size:11px;color:var(--txt3);margin-top:3px">${note}</div>`:''}
-    </div>`;
+    return `<div class="progress-wrap"><div class="progress-header"><span class="progress-label">${label}</span><span class="progress-value">${fmt(val)} <strong>${pct.toFixed(1)}%</strong></span></div>
+    <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${color}"></div></div>
+    ${note?`<div style="font-size:11px;color:var(--txt3);margin-top:3px">${note}</div>`:''}</div>`;
   }
 
   const ab=document.getElementById('alloc-blocks');
   if(ab) ab.innerHTML=[
-    equity>0 ? prog('Equity',equity,'#1D9E75','Stocks + Mutual Funds') : '',
-    debt>0   ? prog('Debt',debt,'#EF9F27','PPF / EPF / NPS / Bonds') : '',
-    fixed>0  ? prog('Fixed',fixed,'#E24B4A','FD / RD') : '',
-    liquid>0 ? prog('Liquid',liquid,'#378ADD','Liquid funds') : '',
-    gold>0   ? prog('Gold / SGB',gold,'#BA7517') : '',
-    re>0     ? prog('Real Estate',re,'#5DCAA5') : '',
-    crypto>0 ? prog('Crypto',crypto,'#7F77DD') : '',
-    total===0 ? '<div class="empty-state"><div class="empty-icon">📊</div>Add investments to see allocation</div>' : ''
+    equity>0?prog('Equity',equity,'#1D9E75','Stocks + Mutual Funds'):'',
+    debt>0?prog('Debt',debt,'#EF9F27','PPF / EPF / NPS / Bonds'):'',
+    fixed>0?prog('Fixed',fixed,'#E24B4A','FD / RD'):'',
+    liquid>0?prog('Liquid',liquid,'#378ADD','Liquid funds'):'',
+    gold>0?prog('Gold / SGB',gold,'#BA7517'):'',
+    re>0?prog('Real Estate',re,'#5DCAA5'):'',
+    crypto>0?prog('Crypto',crypto,'#7F77DD'):'',
+    total===0?'<div class="empty-state"><div class="empty-icon">📊</div>Add investments to see allocation</div>':''
   ].join('');
 
   const gb=document.getElementById('geo-blocks');
   const us=byType.us_stock||0, indian=byType.indian_stock||0;
-  if(gb) gb.innerHTML = us+indian>0 ? prog('US equities',us,'#185FA5')+prog('Indian equities',indian,'#1D9E75')
-    : '<div style="color:var(--txt3);font-size:13px">No direct stock holdings.</div>';
+  if(gb) gb.innerHTML=us+indian>0?prog('US equities',us,'#185FA5')+prog('Indian equities',indian,'#1D9E75')
+    :'<div style="color:var(--txt3);font-size:13px">No direct stock holdings.</div>';
 
   const lb=document.getElementById('liquidity-blocks');
-  if(lb) lb.innerHTML=`
-    <div class="grid2" style="margin-bottom:12px">
-      <div class="metric-card"><div class="metric-label">Liquid</div><div class="metric-value c-blue">${fmt(liquid)}</div><div class="metric-sub">Redeemable in 1–3 days</div></div>
-      <div class="metric-card"><div class="metric-label">Fixed / Locked</div><div class="metric-value">${fmt(fixed+debt)}</div><div class="metric-sub">FD, PPF, Bonds, NPS</div></div>
-    </div>${prog('Liquid',liquid,'#378ADD')}${prog('Fixed/Locked',fixed+debt,'#EF9F27')}`;
+  if(lb) lb.innerHTML=`<div class="grid2" style="margin-bottom:12px">
+    <div class="metric-card"><div class="metric-label">Liquid</div><div class="metric-value c-blue">${fmt(liquid)}</div><div class="metric-sub">Redeemable in 1–3 days</div></div>
+    <div class="metric-card"><div class="metric-label">Fixed / Locked</div><div class="metric-value">${fmt(fixed+debt)}</div><div class="metric-sub">FD, PPF, Bonds, NPS</div></div>
+  </div>${prog('Liquid',liquid,'#378ADD')}${prog('Fixed/Locked',fixed+debt,'#EF9F27')}`;
 
   const inc=txCache.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount),0);
   const exp=txCache.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.amount),0);
@@ -798,32 +851,22 @@ function renderAllocation() {
   const srb=document.getElementById('savings-rate-block');
   if(srb){
     const col=rate>=30?'var(--green)':rate>=20?'var(--amber)':'var(--red)';
-    srb.innerHTML=`
-      <div class="grid3" style="margin-bottom:16px">
-        <div class="metric-card"><div class="metric-label">Income</div><div class="metric-value c-green">${fmt(inc)}</div></div>
-        <div class="metric-card"><div class="metric-label">Expenses</div><div class="metric-value c-red">${fmt(exp)}</div></div>
-        <div class="metric-card"><div class="metric-label">Savings rate</div><div class="metric-value" style="color:${col}">${rate.toFixed(1)}%</div></div>
-      </div>
-      <div class="progress-bar" style="height:10px;margin-bottom:8px"><div class="progress-fill" style="width:${Math.min(rate,100)}%;background:${col}"></div></div>
-      <div style="font-size:12px;color:var(--txt2)">${rate>=30?'Excellent! On track for financial independence.':rate>=20?'Good — push towards 30%+ for faster wealth creation.':'Below recommended. Aim to cut expenses or increase income.'}</div>`;
+    srb.innerHTML=`<div class="grid3" style="margin-bottom:16px">
+      <div class="metric-card"><div class="metric-label">Income</div><div class="metric-value c-green">${fmt(inc)}</div></div>
+      <div class="metric-card"><div class="metric-label">Expenses</div><div class="metric-value c-red">${fmt(exp)}</div></div>
+      <div class="metric-card"><div class="metric-label">Savings rate</div><div class="metric-value" style="color:${col}">${rate.toFixed(1)}%</div></div>
+    </div>
+    <div class="progress-bar" style="height:10px;margin-bottom:8px"><div class="progress-fill" style="width:${Math.min(rate,100)}%;background:${col}"></div></div>
+    <div style="font-size:12px;color:var(--txt2)">${rate>=30?'Excellent! On track for financial independence.':rate>=20?'Good — push towards 30%+.':'Below recommended. Aim to cut expenses or increase income.'}</div>`;
   }
 
-  const debtHoldings=invCache.filter(i=>['ppf','epf','nps','fd','rd','bond','debt_fund','sgb'].includes(i.asset_type));
+  const debtH=invCache.filter(i=>['ppf','epf','nps','fd','rd','bond','debt_fund','sgb'].includes(i.asset_type));
   const dd=document.getElementById('debt-detail');
   if(dd){
-    if(debtHoldings.length===0){dd.innerHTML='<div style="color:var(--txt3);font-size:13px">No debt instruments tracked.</div>';}
-    else dd.innerHTML=`<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Details</th><th>Invested</th><th>Current</th><th>Return</th></tr></thead><tbody>${
-      debtHoldings.map(i=>{
-        const pnl=Number(i.current_value)-Number(i.amount_invested);
-        const pct=Number(i.amount_invested)>0?pnl/Number(i.amount_invested)*100:0;
-        const extra=i.extra_data||{};
-        return `<tr>
-          <td>${i.name}</td>
-          <td><span class="badge badge-debt">${TYPE_LABELS[i.asset_type]}</span></td>
-          <td style="font-size:12px;color:var(--txt2)">${formatExtraDetails(i.asset_type,extra)}</td>
-          <td>${fmt(i.amount_invested)}</td><td>${fmt(i.current_value)}</td>
-          <td style="color:${pct>=0?'var(--green)':'var(--red)'}">${fmtP(pct)}</td>
-        </tr>`;
+    if(debtH.length===0){dd.innerHTML='<div style="color:var(--txt3);font-size:13px">No debt instruments tracked.</div>';return;}
+    dd.innerHTML=`<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Details</th><th>Invested</th><th>Current</th><th>Return</th></tr></thead><tbody>${
+      debtH.map(i=>{const pnl=Number(i.current_value)-Number(i.amount_invested);const pct=Number(i.amount_invested)>0?pnl/Number(i.amount_invested)*100:0;
+        return `<tr><td>${i.name}</td><td><span class="badge badge-debt">${TYPE_LABELS[i.asset_type]}</span></td><td style="font-size:12px;color:var(--txt2)">${formatExtraDetails(i.asset_type,i.extra_data||{})}</td><td>${fmt(i.amount_invested)}</td><td>${fmt(i.current_value)}</td><td style="color:${pct>=0?'var(--green)':'var(--red)'}">${fmtP(pct)}</td></tr>`;
       }).join('')
     }</tbody></table></div>`;
   }
@@ -851,18 +894,18 @@ function renderQuickInsights() {
   const totalAmt=invCache.reduce((s,i)=>s+Number(i.amount_invested),0);
   const byType={};
   invCache.forEach(i=>{byType[i.asset_type]=(byType[i.asset_type]||0)+Number(i.current_value)});
-  const liquid=(byType.liquid||0), monthlyExp=exp/12;
+  const liquid=byType.liquid||0, monthlyExp=exp/12;
   const eqR=totalInv>0?((byType.us_stock||0)+(byType.indian_stock||0)+(byType.mutual_fund||0))/totalInv:0;
   const pnl=totalInv-totalAmt;
 
   if(inc>0&&savRate>=30) insights.push({t:'good',title:'Excellent savings rate',desc:`Saving ${savRate.toFixed(1)}% of income — above 30% benchmark.`});
   else if(inc>0&&savRate<10) insights.push({t:'bad',title:'Critical: very low savings rate',desc:`${savRate.toFixed(1)}% savings rate. Risk of living paycheck-to-paycheck.`});
-  else if(inc>0&&savRate<20) insights.push({t:'warn',title:'Low savings rate',desc:`${savRate.toFixed(1)}% savings rate. Target 20–30%+. Automate via SIP.`});
-  if(inc>0&&monthlyExp>0&&liquid<monthlyExp*3) insights.push({t:'warn',title:'Emergency fund insufficient',desc:`Liquid assets (${fmt(liquid)}) cover less than 3 months of expenses. Target: ${fmt(monthlyExp*6)}.`});
-  if(totalInv>0&&!(byType.us_stock>0)) insights.push({t:'info',title:'No US stock exposure',desc:'Consider US index ETFs via Vested or INDmoney for international diversification.'});
-  if(totalInv>0&&eqR>0.85) insights.push({t:'warn',title:'High equity concentration',desc:`${(eqR*100).toFixed(0)}% in equities. Consider rebalancing with debt/gold.`});
+  else if(inc>0&&savRate<20) insights.push({t:'warn',title:'Low savings rate',desc:`${savRate.toFixed(1)}% savings rate. Target 20–30%+.`});
+  if(inc>0&&monthlyExp>0&&liquid<monthlyExp*3) insights.push({t:'warn',title:'Emergency fund insufficient',desc:`Liquid assets (${fmt(liquid)}) cover less than 3 months. Target: ${fmt(monthlyExp*6)}.`});
+  if(totalInv>0&&!(byType.us_stock>0)) insights.push({t:'info',title:'No US stock exposure',desc:'Consider US index ETFs for international diversification.'});
+  if(totalInv>0&&eqR>0.85) insights.push({t:'warn',title:'High equity concentration',desc:`${(eqR*100).toFixed(0)}% in equities. Consider rebalancing.`});
   if(pnl>0&&totalAmt>0) insights.push({t:'good',title:'Portfolio in profit',desc:`Overall gain: ${fmt(pnl)} (${fmtP(pnl/totalAmt*100)}).`});
-  if(!(byType.ppf>0)&&!(byType.epf>0)) insights.push({t:'info',title:'No PPF/EPF tracked',desc:'Track your PPF and EPF in Investments → PPF/EPF for a complete net worth picture.'});
+  if(!(byType.ppf>0)&&!(byType.epf>0)) insights.push({t:'info',title:'No PPF/EPF tracked',desc:'Track PPF and EPF in Investments for a complete net worth picture.'});
   if(insights.length===0) insights.push({t:'info',title:'Add data for insights',desc:'Enter income, expenses, and investments to receive personalised insights.'});
   el.innerHTML=insights.map(i=>`<div class="insight-item insight-${i.t}"><div class="insight-title">${i.title}</div><div class="insight-desc">${i.desc}</div></div>`).join('');
 }
@@ -880,6 +923,7 @@ async function renderFamilyPage() {
       <span class="member-role role-member">member</span>
     </div>`;
   }
+  await renderMfaStatus();
   const {data:profiles}=await sbClient.from('profiles').select('*');
   if(!profiles||profiles.length===0){el.innerHTML='<div style="color:var(--txt3);font-size:13px">Only your profile is visible.</div>';return;}
   el.innerHTML=profiles.map((p,idx)=>{
@@ -907,7 +951,6 @@ function exportExcel() {
   const totalV=invCache.reduce((s,i)=>s+Number(i.current_value),0);
   const totalA=invCache.reduce((s,i)=>s+Number(i.amount_invested),0);
   const name=userProfile?.full_name||currentUser?.email||'User';
-
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([
     ['PERSONAL FINANCE SUMMARY — '+name,''],['Generated',new Date().toLocaleDateString('en-IN')],['',''],
     ['Income (₹)',inc],['Expenses (₹)',exp],['Savings (₹)',sav],
@@ -915,36 +958,27 @@ function exportExcel() {
     ['',''],['Portfolio Invested (₹)',totalA],['Current Value (₹)',totalV],
     ['P&L (₹)',totalV-totalA],['Return (%)',totalA>0?parseFloat(((totalV-totalA)/totalA*100).toFixed(2)):0]
   ]),'Summary');
-
   const txRows=[['Date','Type','Category','Note','Amount (₹)']];
   txCache.forEach(t=>txRows.push([t.date,t.type,t.category||'',t.note||'',Number(t.amount)]));
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(txRows),'Transactions');
-
-  const invRows=[['Name','Type','Invested (₹)','Current (₹)','P&L (₹)','Return (%)','Units','Avg Price','Date','Maturity','Extra Details']];
-  invCache.forEach(i=>{
-    const pnl=Number(i.current_value)-Number(i.amount_invested);
-    const pct=Number(i.amount_invested)>0?parseFloat((pnl/Number(i.amount_invested)*100).toFixed(2)):0;
-    const extra=formatExtraDetails(i.asset_type,i.extra_data||{});
-    invRows.push([i.name,TYPE_LABELS[i.asset_type]||i.asset_type,Number(i.amount_invested),Number(i.current_value),pnl,pct,i.units||0,i.avg_price||0,i.purchase_date||'',i.maturity_date||'',extra]);
+  const invRows=[['Name','Type','Invested (₹)','Current (₹)','P&L (₹)','Return (%)','Units','Avg Price','Date','Maturity','Details']];
+  invCache.forEach(i=>{const pnl=Number(i.current_value)-Number(i.amount_invested);const pct=Number(i.amount_invested)>0?parseFloat((pnl/Number(i.amount_invested)*100).toFixed(2)):0;
+    invRows.push([i.name,TYPE_LABELS[i.asset_type]||i.asset_type,Number(i.amount_invested),Number(i.current_value),pnl,pct,i.units||0,i.avg_price||0,i.purchase_date||'',i.maturity_date||'',formatExtraDetails(i.asset_type,i.extra_data||{})]);
   });
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(invRows),'Investments');
-
-  // Salary sheet
   if(salaryCache.components.length>0){
     const salRows=[['Component','Kind','Amount/Month (₹)','Taxable/Section','Note']];
     salaryCache.components.forEach(c=>salRows.push([c.name,c.kind,Number(c.amount_monthly),c.taxable||c.section||'',c.note||'']));
-    const earnings=salaryCache.components.filter(c=>c.kind==='earning').reduce((s,c)=>s+Number(c.amount_monthly),0);
-    const deductions=salaryCache.components.filter(c=>c.kind==='deduction').reduce((s,c)=>s+Number(c.amount_monthly),0);
-    salRows.push(['','','','',''],['Gross Earnings/Month','',earnings,'',''],['Total Deductions/Month','',deductions,'',''],['Net Take-Home/Month','',earnings-deductions,'','']);
+    const et=salaryCache.components.filter(c=>c.kind==='earning').reduce((s,c)=>s+Number(c.amount_monthly),0);
+    const dt=salaryCache.components.filter(c=>c.kind==='deduction').reduce((s,c)=>s+Number(c.amount_monthly),0);
+    salRows.push(['','','','',''],['Gross/Month','',et,'',''],['Deductions/Month','',dt,'',''],['Net/Month','',et-dt,'','']);
     XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(salRows),'Salary');
   }
-
   const byType={};invCache.forEach(i=>{byType[i.asset_type]=(byType[i.asset_type]||0)+Number(i.current_value)});
   const tot=Object.values(byType).reduce((s,v)=>s+v,0);
   const allocRows=[['Type','Value (₹)','%']];
   Object.entries(byType).forEach(([k,v])=>allocRows.push([TYPE_LABELS[k]||k,Math.round(v),tot>0?parseFloat((v/tot*100).toFixed(2)):0]));
   XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(allocRows),'Allocation');
-
   XLSX.writeFile(wb,'FinanceTracker_'+name.replace(/\s/g,'_')+'_'+new Date().toISOString().slice(0,10)+'.xlsx');
   toast('✓ Excel exported!');
 }
@@ -963,14 +997,8 @@ async function importJSON(event) {
       const d=JSON.parse(e.target.result);
       if(!d.transactions||!d.investments){toast('Invalid backup file');return}
       let txOk=0,invOk=0;
-      for(const t of d.transactions){
-        const{error}=await sbClient.from('transactions').insert({user_id:currentUser.id,type:t.type,date:t.date,amount:t.amount,category:t.cat||t.category||'Other',note:t.note||''});
-        if(!error) txOk++;
-      }
-      for(const i of d.investments){
-        const{error}=await sbClient.from('investments').insert({user_id:currentUser.id,asset_type:i.type||i.asset_type,name:i.name,amount_invested:i.amount||i.amount_invested,current_value:i.current||i.current_value,units:i.units||0,avg_price:i.avgprice||i.avg_price||0,purchase_date:i.date||i.purchase_date||null,extra_data:i.extra_data||{}});
-        if(!error) invOk++;
-      }
+      for(const t of d.transactions){const{error}=await sbClient.from('transactions').insert({user_id:currentUser.id,type:t.type,date:t.date,amount:t.amount,category:t.cat||t.category||'Other',note:t.note||''});if(!error)txOk++;}
+      for(const i of d.investments){const{error}=await sbClient.from('investments').insert({user_id:currentUser.id,asset_type:i.type||i.asset_type,name:i.name,amount_invested:i.amount||i.amount_invested,current_value:i.current||i.current_value,units:i.units||0,avg_price:i.avgprice||i.avg_price||0,purchase_date:i.date||i.purchase_date||null,extra_data:i.extra_data||{}});if(!error)invOk++;}
       await loadData(); renderAll();
       toast(`✓ Imported ${txOk} transactions, ${invOk} investments`);
     }catch(err){toast('Error: '+err.message)}
@@ -980,7 +1008,7 @@ async function importJSON(event) {
 }
 
 async function deleteAllMyData() {
-  if(!confirm('Permanently delete ALL your transactions and investments? This cannot be undone.')) return;
+  if(!confirm('Permanently delete ALL your data? Cannot be undone.')) return;
   if(!confirm('Final confirmation — delete everything?')) return;
   await Promise.all([
     sbClient.from('transactions').delete().eq('user_id',currentUser.id),
@@ -995,7 +1023,7 @@ function copyLink() {
   navigator.clipboard.writeText(document.getElementById('share-link').value).then(()=>toast('Link copied!')).catch(()=>toast('Copy the link manually'));
 }
 
-function toast(msg,dur=2400) {
+function toast(msg, dur=2400) {
   const el=document.getElementById('toast');
   el.textContent=msg; el.classList.add('show');
   setTimeout(()=>el.classList.remove('show'),dur);
