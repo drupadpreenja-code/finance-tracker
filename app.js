@@ -39,6 +39,13 @@ const AVATAR_COLORS  = ['#185FA5','#1D9E75','#EF9F27','#7F77DD','#E24B4A','#D453
 //  BOOT
 // ══════════════════════════════════════════════════════════
 
+// ── DEBUG (remove after mobile issue is resolved) ──
+function dbg(msg) {
+  console.log('[FT]', msg);
+  const el = document.getElementById('debug-overlay');
+  if (el) { el.style.display = 'block'; el.innerHTML += msg + '\n'; }
+}
+
 window.addEventListener('load', boot);
 
 // ── LOADER HELPERS ──
@@ -120,6 +127,7 @@ async function boot() {
   try {
     const { data: { session } } = await sbClient.auth.getSession();
     hidePageLoader();
+    dbg('boot: session=' + (session ? 'YES user='+session.user.email : 'NO'));
 
     if (session) {
       await enterApp(session.user);
@@ -127,14 +135,15 @@ async function boot() {
       showScreen('auth');
     }
   } catch(e) {
-    console.error(e);
+    dbg('boot error: ' + e.message);
     hidePageLoader();
     showScreen('auth');
   }
 
-  // listen for auth changes (sign in / sign out)
   sbClient.auth.onAuthStateChange(async (event, session) => {
+    dbg('authChange: event='+event+' currentUser='+(currentUser?'SET':'null'));
     if (event === 'SIGNED_IN' && session && !currentUser) {
+      dbg('authChange: calling enterApp for ' + session.user.email);
       await enterApp(session.user);
     }
     if (event === 'SIGNED_OUT') {
@@ -147,25 +156,29 @@ async function boot() {
 
 // Single entry point after any successful password auth
 async function enterApp(user) {
+  dbg('enterApp: ' + user.email);
   try {
-    // Check if MFA is required for this user
-    const { data: { currentLevel, nextLevel } } = await sbClient.auth.mfa.getAuthenticatorAssuranceLevel();
+    const { data: aalData, error: aalErr } = await sbClient.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aalErr) throw aalErr;
 
-    // If user has MFA enrolled but hasn't verified it this session
+    const { currentLevel, nextLevel } = aalData;
+    dbg('enterApp: aal current='+currentLevel+' next='+nextLevel);
+
     if (currentLevel === 'aal1' && nextLevel === 'aal2') {
-      const { data: { totp } } = await sbClient.auth.mfa.listFactors();
-      const verified = totp?.find(f => f.status === 'verified');
+      const { data: factorData } = await sbClient.auth.mfa.listFactors();
+      const verified = factorData?.totp?.find(f => f.status === 'verified');
+      dbg('enterApp: MFA needed, factor=' + (verified ? verified.id : 'NONE'));
       if (verified) {
         mfaFactorId = verified.id;
         showScreen('mfa-verify');
-        return; // wait for user to complete MFA
+        return;
       }
     }
   } catch(e) {
-    console.warn('MFA check failed, proceeding without:', e.message);
+    dbg('enterApp: MFA check error=' + e.message);
   }
 
-  // No MFA required or already at aal2 — go into app
+  dbg('enterApp: going to app');
   await onLogin(user);
   showScreen('app');
   setTimeout(() => renderAll(), 50);
@@ -236,14 +249,21 @@ async function doLogin() {
   const email = document.getElementById('login-email').value.trim();
   const pass  = document.getElementById('login-password').value;
   const msg   = document.getElementById('login-msg');
-  const btn   = document.getElementById('login-btn');
   msg.className = 'auth-msg'; msg.style.display = 'none';
   if (!email || !pass) { msg.className='auth-msg error'; msg.textContent='Please enter your email and password.'; return; }
+
+  const btn = document.getElementById('login-btn');
   btn.innerHTML = '<span class="spinner"></span>Signing in...'; btn.disabled = true;
+
   const { error } = await sbClient.auth.signInWithPassword({ email, password: pass });
-  btn.innerHTML = 'Sign in'; btn.disabled = false;
-  if (error) { msg.className='auth-msg error'; msg.textContent=error.message; }
-  // on success, onAuthStateChange fires → handleSession handles MFA routing
+
+  // Only reset button if we're still on the auth screen (mobile may have already navigated away)
+  const authScreen = document.getElementById('auth-screen');
+  if (authScreen && authScreen.style.display !== 'none') {
+    btn.innerHTML = 'Sign in'; btn.disabled = false;
+    if (error) { msg.className='auth-msg error'; msg.textContent=error.message; }
+  }
+  // If no error, onAuthStateChange fires SIGNED_IN → enterApp handles everything
 }
 
 async function doSignup() {
