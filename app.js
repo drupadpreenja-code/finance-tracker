@@ -145,8 +145,27 @@ async function boot() {
   });
 }
 
-// Single entry point into the app after any successful auth
+// Single entry point after any successful password auth
 async function enterApp(user) {
+  try {
+    // Check if MFA is required for this user
+    const { data: { currentLevel, nextLevel } } = await sbClient.auth.mfa.getAuthenticatorAssuranceLevel();
+
+    // If user has MFA enrolled but hasn't verified it this session
+    if (currentLevel === 'aal1' && nextLevel === 'aal2') {
+      const { data: { totp } } = await sbClient.auth.mfa.listFactors();
+      const verified = totp?.find(f => f.status === 'verified');
+      if (verified) {
+        mfaFactorId = verified.id;
+        showScreen('mfa-verify');
+        return; // wait for user to complete MFA
+      }
+    }
+  } catch(e) {
+    console.warn('MFA check failed, proceeding without:', e.message);
+  }
+
+  // No MFA required or already at aal2 — go into app
   await onLogin(user);
   showScreen('app');
   setTimeout(() => renderAll(), 50);
@@ -295,7 +314,10 @@ async function doMfaVerify() {
 
     btn.innerHTML = 'Verify'; btn.disabled = false;
     const { data: { user } } = await sbClient.auth.getUser();
-    await enterApp(user);
+    // Go directly to app — MFA is now verified (aal2), skip the MFA check in enterApp
+    await onLogin(user);
+    showScreen('app');
+    setTimeout(() => renderAll(), 50);
 
   } catch(e) {
     btn.innerHTML = 'Verify'; btn.disabled = false;
