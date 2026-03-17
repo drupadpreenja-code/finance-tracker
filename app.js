@@ -123,14 +123,29 @@ async function boot() {
 
   try {
     const { data: { session } } = await sbClient.auth.getSession();
-    hidePageLoader();
-    if (session) await handleSession(session.user);
-    else showScreen('auth');
 
+    // Set up listener FIRST before acting on existing session
+    // This prevents double-firing on fresh logins
     sbClient.auth.onAuthStateChange(async (event, session) => {
-      if (event === 'SIGNED_IN'  && session) await handleSession(session.user);
-      if (event === 'SIGNED_OUT')           { currentUser = null; showScreen('auth'); }
+      if (event === 'SIGNED_IN' && session && !sessionHandling) {
+        await handleSession(session.user);
+      }
+      if (event === 'SIGNED_OUT') {
+        sessionHandling = false;
+        currentUser = null;
+        showScreen('auth');
+      }
     });
+
+    hidePageLoader();
+
+    if (session) {
+      // Existing session on page load — handle directly
+      await handleSession(session.user);
+    } else {
+      showScreen('auth');
+    }
+
   } catch(e) {
     console.error(e);
     hidePageLoader();
@@ -138,33 +153,57 @@ async function boot() {
   }
 }
 
+// guard against handleSession being called concurrently
+let sessionHandling = false;
+
 // ── After successful password auth — check if MFA is needed ──
 async function handleSession(user) {
-  // check assurance level: aal1 = password only, aal2 = MFA verified
-  const { data: { currentLevel } } = await sbClient.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (sessionHandling) return;
+  sessionHandling = true;
 
-  if (currentLevel === 'aal1') {
-    // check if user has any enrolled MFA factors
-    const { data: { totp } } = await sbClient.auth.mfa.listFactors();
-    if (totp && totp.length > 0 && totp[0].status === 'verified') {
-      // MFA enrolled but not yet verified this session — show verify screen
-      mfaFactorId = totp[0].id;
-      showScreen('mfa-verify');
+  try {
+    const { data: aalData, error: aalErr } = await sbClient.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (aalErr) throw aalErr;
+    const currentLevel = aalData?.currentLevel;
+
+    if (currentLevel === 'aal1') {
+      const { data: factorData } = await sbClient.auth.mfa.listFactors();
+      const verifiedFactor = factorData?.totp?.find(f => f.status === 'verified');
+
+      if (verifiedFactor) {
+        // MFA enrolled but not yet verified this session
+        mfaFactorId = verifiedFactor.id;
+        showScreen('mfa-verify');
+        return;
+      }
+
+      // No MFA enrolled — go straight into app
+      await onLogin(user);
+      showScreen('app');
+      setTimeout(() => {
+        renderAll();
+        // prompt MFA setup after a short delay so app is fully painted
+        const hasAnyFactor = factorData?.totp?.length > 0;
+        if (!hasAnyFactor) {
+          setTimeout(() => startMfaSetup(), 500);
+        }
+      }, 100);
       return;
     }
-    // no MFA enrolled — show setup prompt after login
+
+    // aal2 = fully MFA verified
     await onLogin(user);
     showScreen('app');
-    const { data: { totp: existingTotp } } = await sbClient.auth.mfa.listFactors();
-    if (!existingTotp || existingTotp.length === 0) {
-      await startMfaSetup(); // prompt to set up MFA
-    }
-    return;
-  }
+    setTimeout(() => renderAll(), 100);
 
-  // aal2 = fully verified
-  await onLogin(user);
-  showScreen('app');
+  } catch(e) {
+    console.error('handleSession error:', e);
+    // on any error just show auth screen
+    showScreen('auth');
+  } finally {
+    // release guard after a delay to prevent rapid re-triggers
+    setTimeout(() => { sessionHandling = false; }, 1000);
+  }
 }
 
 // ══════════════════════════════════════════════════════════
