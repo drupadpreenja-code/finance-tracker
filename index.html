@@ -32,7 +32,7 @@
   <div class="auth-card" style="max-width:480px">
     <div class="auth-logo"><div class="auth-logo-icon">₹</div><span class="auth-logo-text">FinanceTracker</span></div>
     <h2 class="auth-title">Configuration missing</h2>
-    <p class="auth-sub" style="color:var(--red-txt)">Open <code>app.js</code> and fill in your Supabase URL and publishable key at the top.</p>
+    <p class="auth-sub" style="color:var(--red-txt)">Open <code>config.js</code> and fill in your Supabase URL and publishable key.</p>
   </div>
 </div>
 
@@ -464,6 +464,13 @@
 </div><!-- end app-screen -->
 
 <script src="config.js"></script>
-<script src="app.js"></script>
+<!-- App modules — load order matters: state → ui → charts → investments → data → render → auth -->
+<script src="state.js"></script>
+<script src="ui.js"></script>
+<script src="charts.js"></script>
+<script src="investments.js"></script>
+<script src="data.js"></script>
+<script src="render.js"></script>
+<script src="auth.js"></script>
 </body>
 </html>
