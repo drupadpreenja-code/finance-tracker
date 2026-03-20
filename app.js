@@ -20,6 +20,22 @@ let barChart, pieChart, nwChart, invPieChart, eqChart, allocChart;
 const fmt  = n => '₹' + Math.abs(Math.round(n)).toLocaleString('en-IN');
 const fmtP = n => (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
 
+// ── AMOUNT MASKING (applies to all users) ──
+let amountsVisible = false; // hidden by default, toggle to reveal
+
+// fmtA = format amount — masked unless user has revealed
+const fmtA = n => amountsVisible ? fmt(n) : '₹ ••••';
+
+// fmtASign = signed amount (P&L)
+const fmtASign = n => amountsVisible ? ((n >= 0 ? '+' : '') + fmt(n)) : (n >= 0 ? '+••••' : '-••••');
+
+function toggleAmounts() {
+  amountsVisible = !amountsVisible;
+  const btn = document.getElementById('mask-btn');
+  if (btn) btn.textContent = amountsVisible ? '👁' : '🙈';
+  renderAll();
+}
+
 const TYPE_LABELS = {
   us_stock:'US Stock', indian_stock:'Indian Stock', mutual_fund:'Mutual Fund',
   ppf:'PPF', epf:'EPF', nps:'NPS', fd:'Fixed Deposit', rd:'Recurring Deposit',
@@ -296,8 +312,16 @@ async function onLogin(user) {
   document.getElementById('tx-date').value  = new Date().toISOString().slice(0,10);
   document.getElementById('inv-date').value = new Date().toISOString().slice(0,10);
   document.getElementById('share-link').value = window.location.href;
+
+  // show AI insights nav for owners only
+  const navInsights = document.getElementById('nav-insights');
+  if (navInsights) navInsights.style.display = isOwner() ? 'block' : 'none';
+
+  // restore saved API key
+  const ak = localStorage.getItem('fintrack_apikey');
+  if (ak) { const el = document.getElementById('api-key'); if (el) el.value = ak; }
+
   await loadData();
-  // fix theme button label now that the button is in the DOM
   setTimeout(applyThemeToBtn, 50);
 }
 
@@ -808,19 +832,19 @@ function renderDashboard() {
 
   const nwTot = document.getElementById('nw-total');
   if (nwTot) {
-    nwTot.textContent = fmt(netCash + totalInv);
-    document.getElementById('nw-sub').textContent = `Cash: ${fmt(netCash)} + Portfolio: ${fmt(totalInv)}`;
+    nwTot.textContent = fmtA(netCash + totalInv);
+    document.getElementById('nw-sub').textContent = `Cash: ${fmtA(netCash)} + Portfolio: ${fmtA(totalInv)}`;
     document.getElementById('nw-stats').innerHTML = `
-      <div class="nw-stat"><div class="nw-label">Income</div><div style="font-size:17px;font-weight:700">${fmt(income)}</div></div>
-      <div class="nw-stat"><div class="nw-label">Expenses</div><div style="font-size:17px;font-weight:700">${fmt(expenses)}</div></div>
+      <div class="nw-stat"><div class="nw-label">Income</div><div style="font-size:17px;font-weight:700">${fmtA(income)}</div></div>
+      <div class="nw-stat"><div class="nw-label">Expenses</div><div style="font-size:17px;font-weight:700">${fmtA(expenses)}</div></div>
       <div class="nw-stat"><div class="nw-label">Savings rate</div><div style="font-size:17px;font-weight:700">${savRate.toFixed(1)}%</div></div>`;
   }
   const sc = document.getElementById('summary-cards');
   if (sc) sc.innerHTML = `
-    <div class="metric-card"><div class="metric-label">Income</div><div class="metric-value c-green">${fmt(income)}</div></div>
-    <div class="metric-card"><div class="metric-label">Expenses</div><div class="metric-value c-red">${fmt(expenses)}</div></div>
-    <div class="metric-card"><div class="metric-label">Savings</div><div class="metric-value c-blue">${fmt(savings)}</div><div class="metric-sub">Rate: ${savRate.toFixed(1)}%</div></div>
-    <div class="metric-card"><div class="metric-label">Portfolio</div><div class="metric-value">${fmt(totalInv)}</div><div class="metric-sub">${invCache.length} holdings</div></div>`;
+    <div class="metric-card"><div class="metric-label">Income</div><div class="metric-value c-green">${fmtA(income)}</div></div>
+    <div class="metric-card"><div class="metric-label">Expenses</div><div class="metric-value c-red">${fmtA(expenses)}</div></div>
+    <div class="metric-card"><div class="metric-label">Savings</div><div class="metric-value c-blue">${fmtA(savings)}</div><div class="metric-sub">Rate: ${savRate.toFixed(1)}%</div></div>
+    <div class="metric-card"><div class="metric-label">Portfolio</div><div class="metric-value">${fmtA(totalInv)}</div><div class="metric-sub">${invCache.length} holdings</div></div>`;
   renderDashCharts(tx);
   renderQuickInsights();
 }
@@ -893,7 +917,7 @@ function renderTransactions() {
     <td><span class="tag tag-${t.type}">${t.type}</span></td>
     <td>${t.category||'—'}</td>
     <td style="color:var(--txt2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.note||'—'}</td>
-    <td style="text-align:right;font-weight:700;color:${t.type==='income'?'var(--green)':t.type==='expense'?'var(--red)':'var(--blue)'}">${fmt(t.amount)}</td>
+    <td style="text-align:right;font-weight:700;color:${t.type==='income'?'var(--green)':t.type==='expense'?'var(--red)':'var(--blue)'}">${fmtA(t.amount)}</td>
     <td><button class="btn btn-sm btn-danger" onclick="deleteTx(${t.id})">✕</button></td>
   </tr>`).join('');
 }
@@ -921,7 +945,7 @@ function renderSalary() {
         <div class="comp-name">${c.name}</div>
         <div><span class="comp-tag comp-earning">${c.taxable==='no'?'Exempt':c.taxable==='partial'?'Partial':c.taxable==='yes'?'Taxable':''}</span></div>
         <div style="font-size:11px;color:var(--txt3);flex:2">${c.note||''}</div>
-        <div class="comp-amount c-green">${fmt(c.amount_monthly)}<span style="font-size:10px;font-weight:400">/mo</span></div>
+        <div class="comp-amount c-green">${fmtA(c.amount_monthly)}<span style="font-size:10px;font-weight:400">/mo</span></div>
         <button class="btn btn-sm btn-danger" onclick="deleteSalaryComponent(${c.id})" style="margin-left:6px">✕</button>
       </div>`).join('');
 
@@ -932,7 +956,7 @@ function renderSalary() {
         <div class="comp-name">${c.name}</div>
         <div><span class="comp-tag comp-deduction">${c.section||''}</span></div>
         <div style="font-size:11px;color:var(--txt3);flex:2">${c.note||''}</div>
-        <div class="comp-amount c-red">${fmt(c.amount_monthly)}<span style="font-size:10px;font-weight:400">/mo</span></div>
+        <div class="comp-amount c-red">${fmtA(c.amount_monthly)}<span style="font-size:10px;font-weight:400">/mo</span></div>
         <button class="btn btn-sm btn-danger" onclick="deleteSalaryComponent(${c.id})" style="margin-left:6px">✕</button>
       </div>`).join('');
 
@@ -946,7 +970,7 @@ function renderSalary() {
     if (netEl   && !netEl.value)   netEl.value   = netSalary > 0 ? netSalary : '';
     // update preview
     const preview = document.getElementById('slip-preview');
-    if (preview) preview.textContent = earningTotal > 0 ? `Based on components: Gross ${fmt(earningTotal)} − Deductions ${fmt(deductionTotal)} = Net ${fmt(netSalary)}` : '';
+    if (preview) preview.textContent = earningTotal > 0 ? `Based on components: Gross ${fmtA(earningTotal)} − Deductions ${fmtA(deductionTotal)} = Net ${fmtA(netSalary)}` : '';
   }
 
   // set current month in slip form
@@ -976,22 +1000,22 @@ function renderSalary() {
 
     sumEl.innerHTML = `
       <div class="grid3" style="margin-bottom:16px">
-        <div class="metric-card"><div class="metric-label">Expected gross/mo</div><div class="metric-value c-green">${fmt(earningTotal)}</div><div class="metric-sub">${fmt(earningTotal*12)}/yr</div></div>
-        <div class="metric-card"><div class="metric-label">Expected deductions/mo</div><div class="metric-value c-red">${fmt(deductionTotal)}</div><div class="metric-sub">${fmt(deductionTotal*12)}/yr</div></div>
-        <div class="metric-card"><div class="metric-label">Expected net/mo</div><div class="metric-value">${fmt(netSalary)}</div><div class="metric-sub">${fmt(netSalary*12)}/yr</div></div>
+        <div class="metric-card"><div class="metric-label">Expected gross/mo</div><div class="metric-value c-green">${fmtA(earningTotal)}</div><div class="metric-sub">${fmtA(earningTotal*12)}/yr</div></div>
+        <div class="metric-card"><div class="metric-label">Expected deductions/mo</div><div class="metric-value c-red">${fmtA(deductionTotal)}</div><div class="metric-sub">${fmtA(deductionTotal*12)}/yr</div></div>
+        <div class="metric-card"><div class="metric-label">Expected net/mo</div><div class="metric-value">${fmtA(netSalary)}</div><div class="metric-sub">${fmtA(netSalary*12)}/yr</div></div>
       </div>
       ${yearSlips.length > 0 ? `
       <div style="font-size:12px;font-weight:700;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Actual (from ${yearSlips.length} recorded slips)</div>
       <div class="grid2" style="margin-bottom:16px">
-        <div class="metric-card"><div class="metric-label">Actual gross (FY)</div><div class="metric-value c-green">${fmt(actualGross)}</div></div>
-        <div class="metric-card"><div class="metric-label">Actual net (FY)</div><div class="metric-value">${fmt(actualNet)}</div></div>
+        <div class="metric-card"><div class="metric-label">Actual gross (FY)</div><div class="metric-value c-green">${fmtA(actualGross)}</div></div>
+        <div class="metric-card"><div class="metric-label">Actual net (FY)</div><div class="metric-value">${fmtA(actualNet)}</div></div>
       </div>` : ''}
       ${s80C>0||s80D>0||tds>0?`
       <div style="font-size:12px;font-weight:700;color:var(--txt2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">Tax summary</div>
       <div class="grid3">
-        ${s80C>0?`<div class="metric-card"><div class="metric-label">80C/yr</div><div class="metric-value c-blue">${fmt(s80C)}</div><div class="metric-sub">Limit: ₹1,50,000</div></div>`:''}
-        ${s80D>0?`<div class="metric-card"><div class="metric-label">80D/yr</div><div class="metric-value c-blue">${fmt(s80D)}</div><div class="metric-sub">Limit: ₹25,000–50,000</div></div>`:''}
-        ${tds>0?`<div class="metric-card"><div class="metric-label">TDS/mo</div><div class="metric-value c-amber">${fmt(tds)}</div><div class="metric-sub">${fmt(tds*12)}/yr</div></div>`:''}
+        ${s80C>0?`<div class="metric-card"><div class="metric-label">80C/yr</div><div class="metric-value c-blue">${fmtA(s80C)}</div><div class="metric-sub">Limit: ₹1,50,000</div></div>`:''}
+        ${s80D>0?`<div class="metric-card"><div class="metric-label">80D/yr</div><div class="metric-value c-blue">${fmtA(s80D)}</div><div class="metric-sub">Limit: ₹25,000–50,000</div></div>`:''}
+        ${tds>0?`<div class="metric-card"><div class="metric-label">TDS/mo</div><div class="metric-value c-amber">${fmtA(tds)}</div><div class="metric-sub">${fmtA(tds*12)}/yr</div></div>`:''}
       </div>`:''}`;
   }
 
@@ -1020,9 +1044,9 @@ function renderSalarySlips() {
 
   el.innerHTML = `
     <div class="grid3" style="margin-bottom:14px">
-      <div class="metric-card"><div class="metric-label">Total gross (${yearFilter})</div><div class="metric-value c-green">${fmt(totalGross)}</div><div class="metric-sub">${slips.length} months recorded</div></div>
-      <div class="metric-card"><div class="metric-label">Total deductions</div><div class="metric-value c-red">${fmt(totalDed)}</div></div>
-      <div class="metric-card"><div class="metric-label">Total net pay</div><div class="metric-value">${fmt(totalNet)}</div></div>
+      <div class="metric-card"><div class="metric-label">Total gross (${yearFilter})</div><div class="metric-value c-green">${fmtA(totalGross)}</div><div class="metric-sub">${slips.length} months recorded</div></div>
+      <div class="metric-card"><div class="metric-label">Total deductions</div><div class="metric-value c-red">${fmtA(totalDed)}</div></div>
+      <div class="metric-card"><div class="metric-label">Total net pay</div><div class="metric-value">${fmtA(totalNet)}</div></div>
     </div>
     <div class="table-wrap">
       <table>
@@ -1030,9 +1054,9 @@ function renderSalarySlips() {
         <tbody>
           ${slips.map(sl => `<tr>
             <td style="font-weight:600">${MONTH_NAMES[sl.month-1]} ${sl.year}</td>
-            <td class="c-green" style="font-weight:600">${fmt(sl.gross_earnings)}</td>
-            <td class="c-red">${fmt(sl.total_deductions)}</td>
-            <td style="font-weight:700">${fmt(sl.net_salary)}</td>
+            <td class="c-green" style="font-weight:600">${fmtA(sl.gross_earnings)}</td>
+            <td class="c-red">${fmtA(sl.total_deductions)}</td>
+            <td style="font-weight:700">${fmtA(sl.net_salary)}</td>
             <td class="hide-mobile" style="font-size:12px;color:var(--txt2)">${sl.notes||'—'}</td>
             <td>
               <button class="btn btn-sm" onclick="prefillSlip(${sl.month},${sl.year},${sl.gross_earnings},${sl.total_deductions},${sl.net_salary})" title="Copy to form">✎</button>
@@ -1071,8 +1095,8 @@ function renderInvestments() {
         <td><div class="holding-name">${i.name}</div><div class="holding-meta">${i.units>0?i.units+' units':''} ${i.avg_price>0?'· avg ₹'+i.avg_price:''} ${i.purchase_date?'· '+i.purchase_date:''}</div></td>
         <td><span class="badge ${TYPE_BADGE[i.asset_type]||'badge-in'}">${TYPE_LABELS[i.asset_type]||i.asset_type}</span></td>
         <td style="font-size:12px;color:var(--txt2)">${formatExtraDetails(i.asset_type,i.extra_data||{})}</td>
-        <td>${fmt(i.amount_invested)}</td><td>${fmt(i.current_value)}</td>
-        <td style="text-align:right;font-weight:700;color:${pnl>=0?'var(--green)':'var(--red)'}">${pnl>=0?'+':''}${fmt(pnl)}</td>
+        <td>${fmtA(i.amount_invested)}</td><td>${fmtA(i.current_value)}</td>
+        <td style="text-align:right;font-weight:700;color:${pnl>=0?'var(--green)':'var(--red)'}">${fmtASign(pnl)}</td>
         <td style="text-align:right;color:${pct>=0?'var(--green)':'var(--red)'}">${fmtP(pct)}</td>
         <td><button class="btn btn-sm btn-danger" onclick="deleteInv(${i.id})">✕</button></td>
       </tr>`;
@@ -1083,9 +1107,9 @@ function renderInvestments() {
   const pnl=totalV-totalA, pct=totalA>0?pnl/totalA*100:0;
   const tc=document.getElementById('inv-top-cards');
   if(tc) tc.innerHTML=`
-    <div class="metric-card"><div class="metric-label">Invested</div><div class="metric-value">${fmt(totalA)}</div></div>
-    <div class="metric-card"><div class="metric-label">Current value</div><div class="metric-value">${fmt(totalV)}</div></div>
-    <div class="metric-card"><div class="metric-label">P&L</div><div class="metric-value ${pnl>=0?'c-green':'c-red'}">${pnl>=0?'+':''}${fmt(pnl)}</div><div class="metric-sub">${fmtP(pct)}</div></div>
+    <div class="metric-card"><div class="metric-label">Invested</div><div class="metric-value">${fmtA(totalA)}</div></div>
+    <div class="metric-card"><div class="metric-label">Current value</div><div class="metric-value">${fmtA(totalV)}</div></div>
+    <div class="metric-card"><div class="metric-label">P&L</div><div class="metric-value ${pnl>=0?'c-green':'c-red'}">${fmtASign(pnl)}</div><div class="metric-sub">${fmtP(pct)}</div></div>
     <div class="metric-card"><div class="metric-label">Holdings</div><div class="metric-value">${invCache.length}</div></div>`;
   renderInvCharts(totalV);
 }
@@ -1132,7 +1156,7 @@ function renderAllocation() {
 
   function prog(label,val,color,note=''){
     const pct=total>0?val/total*100:0;
-    return `<div class="progress-wrap"><div class="progress-header"><span class="progress-label">${label}</span><span class="progress-value">${fmt(val)} <strong>${pct.toFixed(1)}%</strong></span></div>
+    return `<div class="progress-wrap"><div class="progress-header"><span class="progress-label">${label}</span><span class="progress-value">${fmtA(val)} <strong>${pct.toFixed(1)}%</strong></span></div>
     <div class="progress-bar"><div class="progress-fill" style="width:${pct}%;background:${color}"></div></div>
     ${note?`<div style="font-size:11px;color:var(--txt3);margin-top:3px">${note}</div>`:''}</div>`;
   }
@@ -1156,8 +1180,8 @@ function renderAllocation() {
 
   const lb=document.getElementById('liquidity-blocks');
   if(lb) lb.innerHTML=`<div class="grid2" style="margin-bottom:12px">
-    <div class="metric-card"><div class="metric-label">Liquid</div><div class="metric-value c-blue">${fmt(liquid)}</div><div class="metric-sub">Redeemable in 1–3 days</div></div>
-    <div class="metric-card"><div class="metric-label">Fixed / Locked</div><div class="metric-value">${fmt(fixed+debt)}</div><div class="metric-sub">FD, PPF, Bonds, NPS</div></div>
+    <div class="metric-card"><div class="metric-label">Liquid</div><div class="metric-value c-blue">${fmtA(liquid)}</div><div class="metric-sub">Redeemable in 1–3 days</div></div>
+    <div class="metric-card"><div class="metric-label">Fixed / Locked</div><div class="metric-value">${fmtA(fixed+debt)}</div><div class="metric-sub">FD, PPF, Bonds, NPS</div></div>
   </div>${prog('Liquid',liquid,'#378ADD')}${prog('Fixed/Locked',fixed+debt,'#EF9F27')}`;
 
   const inc=txCache.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount),0);
@@ -1167,8 +1191,8 @@ function renderAllocation() {
   if(srb){
     const col=rate>=30?'var(--green)':rate>=20?'var(--amber)':'var(--red)';
     srb.innerHTML=`<div class="grid3" style="margin-bottom:16px">
-      <div class="metric-card"><div class="metric-label">Income</div><div class="metric-value c-green">${fmt(inc)}</div></div>
-      <div class="metric-card"><div class="metric-label">Expenses</div><div class="metric-value c-red">${fmt(exp)}</div></div>
+      <div class="metric-card"><div class="metric-label">Income</div><div class="metric-value c-green">${fmtA(inc)}</div></div>
+      <div class="metric-card"><div class="metric-label">Expenses</div><div class="metric-value c-red">${fmtA(exp)}</div></div>
       <div class="metric-card"><div class="metric-label">Savings rate</div><div class="metric-value" style="color:${col}">${rate.toFixed(1)}%</div></div>
     </div>
     <div class="progress-bar" style="height:10px;margin-bottom:8px"><div class="progress-fill" style="width:${Math.min(rate,100)}%;background:${col}"></div></div>
@@ -1181,7 +1205,7 @@ function renderAllocation() {
     if(debtH.length===0){dd.innerHTML='<div style="color:var(--txt3);font-size:13px">No debt instruments tracked.</div>';return;}
     dd.innerHTML=`<div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Details</th><th>Invested</th><th>Current</th><th>Return</th></tr></thead><tbody>${
       debtH.map(i=>{const pnl=Number(i.current_value)-Number(i.amount_invested);const pct=Number(i.amount_invested)>0?pnl/Number(i.amount_invested)*100:0;
-        return `<tr><td>${i.name}</td><td><span class="badge badge-debt">${TYPE_LABELS[i.asset_type]}</span></td><td style="font-size:12px;color:var(--txt2)">${formatExtraDetails(i.asset_type,i.extra_data||{})}</td><td>${fmt(i.amount_invested)}</td><td>${fmt(i.current_value)}</td><td style="color:${pct>=0?'var(--green)':'var(--red)'}">${fmtP(pct)}</td></tr>`;
+        return `<tr><td>${i.name}</td><td><span class="badge badge-debt">${TYPE_LABELS[i.asset_type]}</span></td><td style="font-size:12px;color:var(--txt2)">${formatExtraDetails(i.asset_type,i.extra_data||{})}</td><td>${fmtA(i.amount_invested)}</td><td>${fmtA(i.current_value)}</td><td style="color:${pct>=0?'var(--green)':'var(--red)'}">${fmtP(pct)}</td></tr>`;
       }).join('')
     }</tbody></table></div>`;
   }
@@ -1216,10 +1240,10 @@ function renderQuickInsights() {
   if(inc>0&&savRate>=30) insights.push({t:'good',title:'Excellent savings rate',desc:`Saving ${savRate.toFixed(1)}% of income — above 30% benchmark.`});
   else if(inc>0&&savRate<10) insights.push({t:'bad',title:'Critical: very low savings rate',desc:`${savRate.toFixed(1)}% savings rate. Risk of living paycheck-to-paycheck.`});
   else if(inc>0&&savRate<20) insights.push({t:'warn',title:'Low savings rate',desc:`${savRate.toFixed(1)}% savings rate. Target 20–30%+.`});
-  if(inc>0&&monthlyExp>0&&liquid<monthlyExp*3) insights.push({t:'warn',title:'Emergency fund insufficient',desc:`Liquid assets (${fmt(liquid)}) cover less than 3 months. Target: ${fmt(monthlyExp*6)}.`});
+  if(inc>0&&monthlyExp>0&&liquid<monthlyExp*3) insights.push({t:'warn',title:'Emergency fund insufficient',desc:`Liquid assets (${fmtA(liquid)}) cover less than 3 months. Target: ${fmtA(monthlyExp*6)}.`});
   if(totalInv>0&&!(byType.us_stock>0)) insights.push({t:'info',title:'No US stock exposure',desc:'Consider US index ETFs for international diversification.'});
   if(totalInv>0&&eqR>0.85) insights.push({t:'warn',title:'High equity concentration',desc:`${(eqR*100).toFixed(0)}% in equities. Consider rebalancing.`});
-  if(pnl>0&&totalAmt>0) insights.push({t:'good',title:'Portfolio in profit',desc:`Overall gain: ${fmt(pnl)} (${fmtP(pnl/totalAmt*100)}).`});
+  if(pnl>0&&totalAmt>0) insights.push({t:'good',title:'Portfolio in profit',desc:`Overall gain: ${fmtA(pnl)} (${fmtP(pnl/totalAmt*100)}).`});
   if(!(byType.ppf>0)&&!(byType.epf>0)) insights.push({t:'info',title:'No PPF/EPF tracked',desc:'Track PPF and EPF in Investments for a complete net worth picture.'});
   if(insights.length===0) insights.push({t:'info',title:'Add data for insights',desc:'Enter income, expenses, and investments to receive personalised insights.'});
   el.innerHTML=insights.map(i=>`<div class="insight-item insight-${i.t}"><div class="insight-title">${i.title}</div><div class="insight-desc">${i.desc}</div></div>`).join('');
@@ -1252,6 +1276,97 @@ async function renderFamilyPage() {
       <span class="member-role role-member">${p.role||'member'}</span>
     </div>`;
   }).join('');
+}
+
+// ══════════════════════════════════════════════════════════
+//  AI INSIGHTS (owner only)
+// ══════════════════════════════════════════════════════════
+
+function saveApiKey() {
+  const k = document.getElementById('api-key')?.value?.trim();
+  if (k) { localStorage.setItem('fintrack_apikey', k); toast('API key saved!'); }
+}
+
+function buildContext() {
+  const inc = txCache.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount),0);
+  const exp = txCache.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.amount),0);
+  const sav = txCache.filter(t=>t.type==='saving').reduce((s,t)=>s+Number(t.amount),0);
+  const byType = {};
+  invCache.forEach(i => { byType[i.asset_type] = (byType[i.asset_type]||0) + Number(i.current_value); });
+  const catSpend = {};
+  txCache.filter(t=>t.type==='expense').forEach(t => { catSpend[t.category] = (catSpend[t.category]||0) + Number(t.amount); });
+  const totalV = invCache.reduce((s,i)=>s+Number(i.current_value),0);
+  const totalA = invCache.reduce((s,i)=>s+Number(i.amount_invested),0);
+  const earnings   = salaryCache.components.filter(c=>c.kind==='earning').reduce((s,c)=>s+Number(c.amount_monthly),0);
+  const deductions = salaryCache.components.filter(c=>c.kind==='deduction').reduce((s,c)=>s+Number(c.amount_monthly),0);
+  return `Indian investor financial data:
+Income: ₹${inc.toLocaleString('en-IN')}, Expenses: ₹${exp.toLocaleString('en-IN')}, Savings: ₹${sav.toLocaleString('en-IN')}
+Savings rate: ${inc>0?((inc-exp)/inc*100).toFixed(1):0}%
+Monthly salary: Gross ₹${earnings.toLocaleString('en-IN')}, Deductions ₹${deductions.toLocaleString('en-IN')}, Net ₹${(earnings-deductions).toLocaleString('en-IN')}
+Portfolio invested: ₹${totalA.toLocaleString('en-IN')}, Current: ₹${totalV.toLocaleString('en-IN')}, P&L: ₹${(totalV-totalA).toLocaleString('en-IN')}
+Asset breakdown: ${JSON.stringify(Object.fromEntries(Object.entries(byType).map(([k,v])=>[k,Math.round(v)])))}
+Holdings: ${invCache.map(i=>`${i.name}(${TYPE_LABELS[i.asset_type]||i.asset_type}):₹${Math.round(i.current_value).toLocaleString('en-IN')}`).join(', ')}
+Top expenses: ${JSON.stringify(Object.fromEntries(Object.entries(catSpend).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v])=>[k,Math.round(v)])))}`;
+}
+
+async function callClaude(prompt, maxTokens=1000) {
+  const apiKey = localStorage.getItem('fintrack_apikey');
+  const el = document.getElementById('api-key');
+  const key = el?.value?.trim() || apiKey;
+  if (!key || !key.startsWith('sk-')) return 'Please enter your Anthropic API key above.';
+  const resp = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
+    body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:maxTokens, messages:[{ role:'user', content:prompt }] })
+  });
+  if (!resp.ok) { const e = await resp.json().catch(()=>({})); throw new Error(e.error?.message || `API error ${resp.status}`); }
+  const d = await resp.json();
+  return d.content?.[0]?.text || 'No response.';
+}
+
+async function runAnalysis() {
+  if (!isOwner()) { toast('AI insights are available for owners only'); return; }
+  const el  = document.getElementById('ai-output');
+  const btn = document.getElementById('analyse-btn');
+  el.style.color = 'var(--txt3)'; el.style.fontStyle = 'italic';
+  el.textContent = 'Analysing your portfolio…';
+  if (btn) { btn.innerHTML = '<span class="spinner"></span>Analysing…'; btn.disabled = true; }
+  try {
+    const text = await callClaude(`You are a senior personal financial advisor for an Indian investor. Analyse this data and provide a comprehensive assessment.\n\n${buildContext()}\n\nProvide:\n1. Overall financial health score (out of 10)\n2. Key strengths (2–3 points)\n3. Key risks / concerns (2–3 points)\n4. Specific actionable recommendations (4–5 steps)\n5. Portfolio rebalancing suggestions\n6. Tax optimisation tips (80C, 80D, LTCG, ELSS, NPS)\n\nBe specific with numbers. Use Indian financial context.`, 1200);
+    el.style.color = ''; el.style.fontStyle = '';
+    el.textContent = text;
+  } catch(e) {
+    el.style.color = 'var(--red)'; el.style.fontStyle = '';
+    el.textContent = 'Error: ' + e.message;
+  }
+  if (btn) { btn.innerHTML = 'Analyse now'; btn.disabled = false; }
+}
+
+async function askQuestion() {
+  if (!isOwner()) { toast('AI insights are available for owners only'); return; }
+  const q   = document.getElementById('ai-q')?.value?.trim();
+  const el  = document.getElementById('ai-answer');
+  const btn = document.getElementById('ask-btn');
+  if (!q) { toast('Type a question first'); return; }
+  el.style.display = 'block';
+  el.style.color   = 'var(--txt3)'; el.style.fontStyle = 'italic';
+  el.textContent   = 'Thinking…';
+  if (btn) { btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true; }
+  try {
+    const text = await callClaude(`Personal finance advisor for Indian investor. Answer concisely.\n\n${buildContext()}\n\nQuestion: ${q}`, 600);
+    el.style.color = ''; el.style.fontStyle = '';
+    el.textContent = text;
+  } catch(e) {
+    el.style.color = 'var(--red)'; el.style.fontStyle = '';
+    el.textContent = 'Error: ' + e.message;
+  }
+  if (btn) { btn.innerHTML = 'Ask'; btn.disabled = false; }
+}
+
+function quickAsk(q) {
+  const el = document.getElementById('ai-q');
+  if (el) el.value = q;
+  askQuestion();
 }
 
 // ══════════════════════════════════════════════════════════

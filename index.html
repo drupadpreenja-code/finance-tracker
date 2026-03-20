@@ -131,6 +131,7 @@
     </div>
     <div class="topbar-right">
       <button class="btn btn-sm" onclick="refreshData()" id="refresh-btn" title="Refresh data">↻</button>
+      <button class="btn btn-sm" onclick="toggleAmounts()" id="mask-btn" title="Show/hide amounts">🙈</button>
       <button class="btn btn-sm" onclick="toggleTheme()" id="theme-btn" title="Toggle dark/light mode">🌙</button>
       <button class="btn btn-sm btn-danger" onclick="doLogout()">Sign out</button>
     </div>
@@ -143,6 +144,7 @@
     <button class="nav-btn" onclick="showPage('salary',this)">Salary</button>
     <button class="nav-btn" onclick="showPage('investments',this)">Investments</button>
     <button class="nav-btn" onclick="showPage('allocation',this)">Allocation</button>
+    <button class="nav-btn owner-only" id="nav-insights" style="display:none" onclick="showPage('insights',this)">AI Insights</button>
     <button class="nav-btn" onclick="showPage('family',this)">Family</button>
   </nav>
 
@@ -221,7 +223,6 @@
           </div>
         </div>
         <div class="card"><div class="card-header"><span class="card-title">Cash flow trend</span></div><div class="chart-container chart-sm-mobile" style="height:160px"><canvas id="chart-nw"></canvas></div></div>
-        <div class="card"><div class="card-header"><span class="card-title">Quick insights</span></div><div id="quick-insights"></div></div>
       </div>
     </section>
 
@@ -458,6 +459,42 @@
         <p style="font-size:13px;color:var(--txt2);margin-bottom:12px">Permanently delete ALL your data. Cannot be undone.</p>
         <button class="btn btn-danger" onclick="deleteAllMyData()">Delete all my data</button>
       </div>
+    </section>
+
+    <!-- AI INSIGHTS (owner only) -->
+    <section id="page-insights" class="page">
+      <div class="card" style="background:var(--blue-bg);border-color:rgba(24,95,165,.2)">
+        <div class="card-header"><span class="card-title" style="color:var(--blue-txt)">Anthropic API key</span></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input type="password" id="api-key" placeholder="sk-ant-..." style="flex:1;min-width:200px">
+          <button class="btn btn-sm" onclick="saveApiKey()">Save</button>
+        </div>
+        <div style="font-size:11px;color:var(--blue-txt);opacity:.7;margin-top:6px">Stored only in your browser. Get a free key at console.anthropic.com</div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <span class="section-title">Portfolio analysis</span>
+          <button class="btn btn-primary" id="analyse-btn" onclick="runAnalysis()">Analyse now</button>
+        </div>
+        <div id="ai-output" style="background:var(--bg2);border-radius:var(--r);padding:16px;font-size:13px;line-height:1.75;white-space:pre-wrap;min-height:80px;border:0.5px solid var(--bdr);color:var(--txt3);font-style:italic">Click "Analyse now" for personalised AI insights on your financial data.</div>
+      </div>
+      <div class="card">
+        <div class="card-header"><span class="section-title">Ask anything</span></div>
+        <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+          <input type="text" id="ai-q" placeholder="e.g. Am I saving enough? Should I increase my SIP?" style="flex:1">
+          <button class="btn btn-primary" id="ask-btn" onclick="askQuestion()">Ask</button>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:12px">
+          <button class="btn btn-sm" onclick="quickAsk('Am I on track for retirement?')">Retirement check</button>
+          <button class="btn btn-sm" onclick="quickAsk('Is my portfolio diversified enough?')">Diversification</button>
+          <button class="btn btn-sm" onclick="quickAsk('Should I invest more in US or Indian stocks?')">US vs India</button>
+          <button class="btn btn-sm" onclick="quickAsk('How much should I keep in liquid funds?')">Liquidity</button>
+          <button class="btn btn-sm" onclick="quickAsk('Tax saving tips under 80C and 80D?')">Tax saving</button>
+          <button class="btn btn-sm" onclick="quickAsk('Should I prepay my loan or invest the surplus?')">Loan vs invest</button>
+        </div>
+        <div id="ai-answer" style="display:none;background:var(--bg2);border-radius:var(--r);padding:16px;font-size:13px;line-height:1.75;white-space:pre-wrap;border:0.5px solid var(--bdr)"></div>
+      </div>
+      <div class="card"><div class="card-header"><span class="card-title">Quick insights</span></div><div id="quick-insights"></div></div>
     </section>
 
   </main>
