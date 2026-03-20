@@ -23,11 +23,29 @@ const fmtP = n => (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
 // ── AMOUNT MASKING (applies to all users) ──
 let amountsVisible = false; // hidden by default, toggle to reveal
 
-// fmtA = format amount — masked unless user has revealed
-const fmtA = n => amountsVisible ? fmt(n) : '₹ ••••';
+// fmtA = format amount — masked with inline reveal button unless globally shown
+const fmtA = (n, id) => {
+  if (amountsVisible) return fmt(n);
+  const uid = id || 'amt-' + Math.abs(Math.round(n));
+  return `<span class="masked-amount" data-val="${Math.round(n)}" data-uid="${uid}">₹&nbsp;••••<button class="mask-inline-btn" onclick="revealOne(this)" title="Show amount">👁</button></span>`;
+};
 
 // fmtASign = signed amount (P&L)
-const fmtASign = n => amountsVisible ? ((n >= 0 ? '+' : '') + fmt(n)) : (n >= 0 ? '+••••' : '-••••');
+const fmtASign = (n, id) => {
+  if (amountsVisible) return (n >= 0 ? '+' : '') + fmt(n);
+  const uid = id || 'sgn-' + Math.abs(Math.round(n));
+  return `<span class="masked-amount" data-val="${Math.round(n)}" data-signed="1" data-uid="${uid}">${n >= 0 ? '+' : '-'}••••<button class="mask-inline-btn" onclick="revealOne(this)" title="Show amount">👁</button></span>`;
+};
+
+function revealOne(btn) {
+  const span = btn.closest('.masked-amount');
+  if (!span) return;
+  const n = parseInt(span.dataset.val);
+  const signed = span.dataset.signed;
+  span.outerHTML = signed
+    ? ((n >= 0 ? '+' : '') + fmt(Math.abs(n)))
+    : fmt(Math.abs(n));
+}
 
 function toggleAmounts() {
   amountsVisible = !amountsVisible;
@@ -823,8 +841,8 @@ function renderDashboard() {
 
   const nwTot = document.getElementById('nw-total');
   if (nwTot) {
-    nwTot.textContent = fmtA(netCash + totalInv);
-    document.getElementById('nw-sub').textContent = `Cash: ${fmtA(netCash)} + Portfolio: ${fmtA(totalInv)}`;
+    nwTot.innerHTML = fmtA(netCash + totalInv);
+    document.getElementById('nw-sub').innerHTML = `Cash: ${fmtA(netCash)} + Portfolio: ${fmtA(totalInv)}`;
     document.getElementById('nw-stats').innerHTML = `
       <div class="nw-stat"><div class="nw-label">Income</div><div style="font-size:17px;font-weight:700">${fmtA(income)}</div></div>
       <div class="nw-stat"><div class="nw-label">Expenses</div><div style="font-size:17px;font-weight:700">${fmtA(expenses)}</div></div>
@@ -858,7 +876,7 @@ function renderDashCharts(tx) {
       {label:'Savings', data:savM, backgroundColor:'#185FA555', borderColor:'#185FA5', borderWidth:1, borderRadius:4}
     ]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}},
       scales:{ x:{grid:{display:false}}, y:{grid:{color:'rgba(0,0,0,0.04)'},
-        ticks:{callback:v=>v>=1e5?'₹'+(v/1e5).toFixed(0)+'L':v>=1e3?'₹'+(v/1e3).toFixed(0)+'K':'₹'+v}}}}});
+        ticks:{callback:function(v){if(!amountsVisible)return'---';return v>=1e5?'₹'+(v/1e5).toFixed(0)+'L':v>=1e3?'₹'+(v/1e3).toFixed(0)+'K':'₹'+v}}}}}});
   }
   const cats={};
   tx.filter(t=>t.type==='expense').forEach(t=>{cats[t.category]=(cats[t.category]||0)+Number(t.amount)});
@@ -886,7 +904,7 @@ function renderDashCharts(tx) {
     nwChart=new Chart(nwCtx,{type:'line',data:{labels:nwL,datasets:[{data:nwV,borderColor:'#185FA5',backgroundColor:'rgba(24,95,165,0.07)',fill:true,tension:.35,pointRadius:nwV.length<20?3:0}]},
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
         scales:{x:{grid:{display:false},ticks:{maxTicksLimit:8}},y:{grid:{color:'rgba(0,0,0,0.04)'},
-          ticks:{callback:v=>v>=1e5?'₹'+(v/1e5).toFixed(1)+'L':v>=1e3?'₹'+(v/1e3).toFixed(0)+'K':'₹'+v}}}}});
+          ticks:{callback:function(v){if(!amountsVisible)return'---';return v>=1e5?'₹'+(v/1e5).toFixed(1)+'L':v>=1e3?'₹'+(v/1e3).toFixed(0)+'K':'₹'+v}}}}}});
   }
 }
 
@@ -961,7 +979,7 @@ function renderSalary() {
     if (netEl   && !netEl.value)   netEl.value   = netSalary > 0 ? netSalary : '';
     // update preview
     const preview = document.getElementById('slip-preview');
-    if (preview) preview.textContent = earningTotal > 0 ? `Based on components: Gross ${fmtA(earningTotal)} − Deductions ${fmtA(deductionTotal)} = Net ${fmtA(netSalary)}` : '';
+    if (preview) preview.innerHTML = earningTotal > 0 ? `Based on components: Gross ${fmtA(earningTotal)} − Deductions ${fmtA(deductionTotal)} = Net ${fmtA(netSalary)}` : '';
   }
 
   // set current month in slip form
@@ -1204,12 +1222,36 @@ function renderAllocation() {
   const allocCtx=document.getElementById('chart-alloc'), legAlloc=document.getElementById('legend-alloc');
   if(allocCtx&&total>0){
     const aData=[{l:'Equity',v:equity,c:'#1D9E75'},{l:'Debt',v:debt,c:'#EF9F27'},{l:'Fixed',v:fixed,c:'#E24B4A'},{l:'Liquid',v:liquid,c:'#378ADD'},{l:'Gold',v:gold,c:'#BA7517'},{l:'Real Estate',v:re,c:'#5DCAA5'},{l:'Crypto',v:crypto,c:'#7F77DD'}].filter(d=>d.v>0);
+    // convert to percentages for Y-axis (avoids showing rupee amounts on chart)
+    const aDataPct = aData.map(d => ({ ...d, pct: parseFloat((d.v/total*100).toFixed(1)) }));
     if(allocChart) allocChart.destroy();
-    allocChart=new Chart(allocCtx,{type:'bar',data:{labels:aData.map(d=>d.l),datasets:[{data:aData.map(d=>d.v),backgroundColor:aData.map(d=>d.c),borderRadius:6,borderSkipped:false}]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
-        scales:{x:{grid:{display:false}},y:{grid:{color:'rgba(0,0,0,0.04)'},
-          ticks:{callback:v=>v>=1e5?'₹'+(v/1e5).toFixed(1)+'L':v>=1e3?'₹'+(v/1e3).toFixed(0)+'K':'₹'+v}}}}});
-    if(legAlloc) legAlloc.innerHTML=aData.map(d=>`<span class="legend-item"><span class="legend-dot" style="background:${d.c}"></span>${d.l} ${total>0?(d.v/total*100).toFixed(1):0}%</span>`).join('');
+    allocChart=new Chart(allocCtx,{
+      type:'bar',
+      data:{
+        labels: aDataPct.map(d=>d.l),
+        datasets:[{
+          data: aDataPct.map(d=>d.pct),
+          backgroundColor: aDataPct.map(d=>d.c),
+          borderRadius:6, borderSkipped:false
+        }]
+      },
+      options:{
+        responsive:true, maintainAspectRatio:false,
+        plugins:{
+          legend:{display:false},
+          tooltip:{callbacks:{label: ctx => `${ctx.parsed.y}% of portfolio`}}
+        },
+        scales:{
+          x:{grid:{display:false}},
+          y:{
+            grid:{color:'rgba(0,0,0,0.04)'},
+            ticks:{callback: v => v+'%'},
+            max: 100
+          }
+        }
+      }
+    });
+    if(legAlloc) legAlloc.innerHTML=aDataPct.map(d=>`<span class="legend-item"><span class="legend-dot" style="background:${d.c}"></span>${d.l} ${d.pct}%</span>`).join('');
   }
 }
 
