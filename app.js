@@ -730,96 +730,122 @@ function renderDashboard() {
   renderQuickInsights();
 }
 
-// Replace canvas with a fresh one to avoid Chart.js stale-context issues
-function freshCanvas(id) {
-  const old = document.getElementById(id);
-  if (!old) return null;
-  const neu = document.createElement('canvas');
-  neu.id = id;
-  neu.style.cssText = old.style.cssText;
-  old.parentNode.replaceChild(neu, old);
-  return neu;
+// Destroy a Chart.js instance and wipe the canvas cleanly
+function destroyChart(chartVar, id) {
+  if (chartVar) { try { chartVar.destroy(); } catch(e){} }
+  var c = document.getElementById(id);
+  if (c) { var ctx = c.getContext('2d'); ctx.clearRect(0, 0, c.width, c.height); }
+  return null;
 }
 
 function renderDashCharts(tx) {
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const incM=Array(12).fill(0), expM=Array(12).fill(0), savM=Array(12).fill(0);
-  txCache.forEach(t => {
-    const m = new Date(t.date).getMonth();
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var incM=Array(12).fill(0), expM=Array(12).fill(0), savM=Array(12).fill(0);
+  txCache.forEach(function(t) {
+    var m = new Date(t.date).getMonth();
     if(t.type==='income')  incM[m]+=Number(t.amount);
     if(t.type==='expense') expM[m]+=Number(t.amount);
     if(t.type==='saving')  savM[m]+=Number(t.amount);
   });
 
-  // Bar chart Y-axis: amounts when visible, percentages of max when masked
-  const barCtx = freshCanvas('chart-bar');
-  if (barCtx) {
-    if (barChart) { barChart.destroy(); barChart = null; }
-    const maxVal = Math.max(...incM, ...expM, ...savM, 1);
-    const displayIncM = amountsVisible ? incM : incM.map(v => v/maxVal*100);
-    const displayExpM = amountsVisible ? expM : expM.map(v => v/maxVal*100);
-    const displaySavM = amountsVisible ? savM : savM.map(v => v/maxVal*100);
-    barChart = new Chart(barCtx, { type:'bar', data:{ labels:months, datasets:[
-      {label:'Income',  data:displayIncM, backgroundColor:'#1D9E7555', borderColor:'#1D9E75', borderWidth:1, borderRadius:4},
-      {label:'Expenses',data:displayExpM, backgroundColor:'#E24B4A55', borderColor:'#E24B4A', borderWidth:1, borderRadius:4},
-      {label:'Savings', data:displaySavM, backgroundColor:'#185FA555', borderColor:'#185FA5', borderWidth:1, borderRadius:4}
-    ]}, options:{ responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false},
-      tooltip:{callbacks:{label:function(ctx){
-        if (amountsVisible) return ctx.dataset.label + ': \u20b9' + Math.round(ctx.parsed.y).toLocaleString('en-IN');
-        return ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(0) + '% (relative)';
-      }}}},
-      scales:{ x:{grid:{display:false}}, y:{grid:{color:'rgba(0,0,0,0.04)'},
-        ticks:{callback:function(v){
-          var n=parseFloat(v);
-          if(isNaN(n)) return '';
-          return amountsVisible
-            ? (n>=1e5 ? '\u20b9'+(n/1e5).toFixed(0)+'L' : n>=1e3 ? '\u20b9'+(n/1e3).toFixed(0)+'K' : '\u20b9'+Math.round(n))
-            : n.toFixed(0)+'%';
-        }}}}}});
+  // ── BAR CHART ──
+  barChart = destroyChart(barChart, 'chart-bar');
+  var barEl = document.getElementById('chart-bar');
+  if (barEl) {
+    var maxVal = Math.max.apply(null, incM.concat(expM).concat(savM).concat([1]));
+    // masked → show % of tallest bar; visible → show real amounts
+    var dInc = amountsVisible ? incM : incM.map(function(v){return Math.round(v/maxVal*100);});
+    var dExp = amountsVisible ? expM : expM.map(function(v){return Math.round(v/maxVal*100);});
+    var dSav = amountsVisible ? savM : savM.map(function(v){return Math.round(v/maxVal*100);});
+    var masked = !amountsVisible;
+    barChart = new Chart(barEl.getContext('2d'), {
+      type: 'bar',
+      data: {
+        labels: months,
+        datasets: [
+          {label:'Income',   data:dInc, backgroundColor:'#1D9E7555', borderColor:'#1D9E75', borderWidth:1, borderRadius:4},
+          {label:'Expenses', data:dExp, backgroundColor:'#E24B4A55', borderColor:'#E24B4A', borderWidth:1, borderRadius:4},
+          {label:'Savings',  data:dSav, backgroundColor:'#185FA555', borderColor:'#185FA5', borderWidth:1, borderRadius:4}
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: {display:false},
+          tooltip: {callbacks:{label:function(ctx){
+            if (!masked) return ctx.dataset.label+': \u20b9'+Math.round(ctx.parsed.y).toLocaleString('en-IN');
+            return ctx.dataset.label+': '+ctx.parsed.y+'%';
+          }}}
+        },
+        scales: {
+          x: {grid:{display:false}},
+          y: {
+            grid: {color:'rgba(0,0,0,0.04)'},
+            ticks: {callback: function(v){
+              if (!masked) return v>=1e5?'\u20b9'+(v/1e5).toFixed(0)+'L':v>=1e3?'\u20b9'+(v/1e3).toFixed(0)+'K':'\u20b9'+v;
+              return v+'%';
+            }}
+          }
+        }
+      }
+    });
   }
 
-  const cats={};
-  tx.filter(t=>t.type==='expense').forEach(t=>{cats[t.category]=(cats[t.category]||0)+Number(t.amount)});
-  const cL=Object.keys(cats), cV=Object.values(cats);
-  const cC=['#378ADD','#1D9E75','#EF9F27','#E24B4A','#7F77DD','#D4537E','#BA7517','#5DCAA5','#F09995','#9FE1CB'];
-  const pieCtx = freshCanvas('chart-pie');
-  if (pieCtx && cL.length>0) {
-    if (pieChart) { pieChart.destroy(); pieChart = null; }
-    pieChart = new Chart(pieCtx,{type:'doughnut',data:{labels:cL,datasets:[{data:cV,backgroundColor:cC.slice(0,cL.length),borderWidth:0}]},
+  // ── DONUT CHART ──
+  pieChart = destroyChart(pieChart, 'chart-pie');
+  var cats={};
+  tx.filter(function(t){return t.type==='expense';}).forEach(function(t){cats[t.category]=(cats[t.category]||0)+Number(t.amount);});
+  var cL=Object.keys(cats), cV=Object.values(cats);
+  var cC=['#378ADD','#1D9E75','#EF9F27','#E24B4A','#7F77DD','#D4537E','#BA7517','#5DCAA5','#F09995','#9FE1CB'];
+  var pieEl = document.getElementById('chart-pie');
+  if (pieEl && cL.length>0) {
+    pieChart = new Chart(pieEl.getContext('2d'),{type:'doughnut',data:{labels:cL,datasets:[{data:cV,backgroundColor:cC.slice(0,cL.length),borderWidth:0}]},
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},cutout:'62%'}});
-    const tot=cV.reduce((a,b)=>a+b,0);
-    document.getElementById('legend-cat').innerHTML=cL.map((l,i)=>'<span class="legend-item"><span class="legend-dot" style="background:'+cC[i%cC.length]+'"></span>'+l+' '+(tot>0?(cV[i]/tot*100).toFixed(0):0)+'%</span>').join('');
+    var tot=cV.reduce(function(a,b){return a+b;},0);
+    var legEl = document.getElementById('legend-cat');
+    if(legEl) legEl.innerHTML=cL.map(function(l,i){return '<span class="legend-item"><span class="legend-dot" style="background:'+cC[i%cC.length]+'"></span>'+l+' '+(tot>0?(cV[i]/tot*100).toFixed(0):0)+'%</span>';}).join('');
   }
 
-  // Cashflow chart Y-axis: amounts when visible, relative % when masked
-  const nwCtx = freshCanvas('chart-nw');
-  if (nwCtx && txCache.length>0) {
-    const sorted=[...txCache].sort((a,b)=>new Date(a.date)-new Date(b.date));
-    let run=0; const nwL=[], nwV=[];
-    sorted.forEach(t=>{
+  // ── CASHFLOW LINE CHART ──
+  nwChart = destroyChart(nwChart, 'chart-nw');
+  var nwEl = document.getElementById('chart-nw');
+  if (nwEl && txCache.length>0) {
+    var sorted=[].concat(txCache).sort(function(a,b){return new Date(a.date)-new Date(b.date);});
+    var run=0, nwL=[], nwV=[];
+    sorted.forEach(function(t){
       if(t.type==='income')  run+=Number(t.amount);
       if(t.type==='expense') run-=Number(t.amount);
       if(t.type==='saving')  run+=Number(t.amount);
       nwL.push(t.date.slice(5)); nwV.push(Math.round(run));
     });
-    const maxAbs = Math.max(...nwV.map(v=>Math.abs(v)), 1);
-    const displayNwV = amountsVisible ? nwV : nwV.map(v => v/maxAbs*100);
-    if(nwChart) { nwChart.destroy(); nwChart = null; }
-    nwChart=new Chart(nwCtx,{type:'line',data:{labels:nwL,datasets:[{data:displayNwV,borderColor:'#185FA5',backgroundColor:'rgba(24,95,165,0.07)',fill:true,tension:.35,pointRadius:nwV.length<20?3:0}]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},
-        tooltip:{callbacks:{label:function(ctx){
-          return amountsVisible
-            ? 'Balance: \u20b9' + Math.round(ctx.parsed.y).toLocaleString('en-IN')
-            : 'Trend: ' + ctx.parsed.y.toFixed(0) + '%';
-        }}}},
-        scales:{x:{grid:{display:false},ticks:{maxTicksLimit:8}},y:{grid:{color:'rgba(0,0,0,0.04)'},
-          ticks:{callback:function(v){
-            var n=parseFloat(v);
-            if(isNaN(n)) return '';
-            return amountsVisible
-              ? (n>=1e5 ? '\u20b9'+(n/1e5).toFixed(1)+'L' : n>=1e3 ? '\u20b9'+(n/1e3).toFixed(0)+'K' : '\u20b9'+Math.round(n))
-              : n.toFixed(0)+'%';
-          }}}}}});
+    var maxAbs = Math.max.apply(null, nwV.map(function(v){return Math.abs(v);}).concat([1]));
+    // masked → scale to %; visible → real values
+    var dNw = amountsVisible ? nwV : nwV.map(function(v){return Math.round(v/maxAbs*100);});
+    var maskedNw = !amountsVisible;
+    nwChart = new Chart(nwEl.getContext('2d'), {
+      type: 'line',
+      data: {labels:nwL, datasets:[{data:dNw, borderColor:'#185FA5', backgroundColor:'rgba(24,95,165,0.07)', fill:true, tension:.35, pointRadius:nwV.length<20?3:0}]},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: {display:false},
+          tooltip: {callbacks:{label:function(ctx){
+            if (!maskedNw) return 'Balance: \u20b9'+Math.round(ctx.parsed.y).toLocaleString('en-IN');
+            return 'Trend: '+ctx.parsed.y+'%';
+          }}}
+        },
+        scales: {
+          x: {grid:{display:false}, ticks:{maxTicksLimit:8}},
+          y: {
+            grid: {color:'rgba(0,0,0,0.04)'},
+            ticks: {callback: function(v){
+              if (!maskedNw) return v>=1e5?'\u20b9'+(v/1e5).toFixed(1)+'L':v>=1e3?'\u20b9'+(v/1e3).toFixed(0)+'K':'\u20b9'+v;
+              return v+'%';
+            }}
+          }
+        }
+      }
+    });
   }
 }
 
@@ -1009,16 +1035,15 @@ function renderInvCharts(total) {
   const byType={};
   invCache.forEach(i=>{byType[i.asset_type]=(byType[i.asset_type]||0)+Number(i.current_value)});
   const cols=['#185FA5','#1D9E75','#EF9F27','#7F77DD','#E24B4A','#D4537E','#BA7517','#5DCAA5','#9FE1CB','#F09995'];
-  const invCtx=freshCanvas('chart-inv-pie'), legInv=document.getElementById('legend-inv');
+  invPieChart=destroyChart(invPieChart,'chart-inv-pie'); const invCtx=document.getElementById('chart-inv-pie'), legInv=document.getElementById('legend-inv');
   if(invCtx&&invCache.length>0){
     const entries=Object.entries(byType).filter(([,v])=>v>0);
     const labels=entries.map(([k])=>TYPE_LABELS[k]||k), vals=entries.map(([,v])=>v);
-    if(invPieChart) { invPieChart.destroy(); invPieChart = null; }
-    invPieChart=new Chart(invCtx,{type:'doughnut',data:{labels,datasets:[{data:vals,backgroundColor:cols.slice(0,labels.length),borderWidth:0}]},
+    invPieChart=new Chart(invCtx.getContext('2d'),{type:'doughnut',data:{labels,datasets:[{data:vals,backgroundColor:cols.slice(0,labels.length),borderWidth:0}]},
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},cutout:'60%'}});
     if(legInv) legInv.innerHTML=labels.map((l,i)=>'<span class="legend-item"><span class="legend-dot" style="background:'+cols[i%cols.length]+'"></span>'+l+' '+(total>0?(vals[i]/total*100).toFixed(1):0)+'%</span>').join('');
   }
-  const eqCtx=freshCanvas('chart-eq-split'), legEq=document.getElementById('legend-eq');
+  eqChart=destroyChart(eqChart,'chart-eq-split'); const eqCtx=document.getElementById('chart-eq-split'), legEq=document.getElementById('legend-eq');
   if(eqCtx){
     const us=byType.us_stock||0, indian=byType.indian_stock||0, mf=byType.mutual_fund||0;
     const eL=[],eV=[],eC=[];
@@ -1026,8 +1051,7 @@ function renderInvCharts(total) {
     if(indian>0){eL.push('Indian Stocks');eV.push(indian);eC.push('#1D9E75')}
     if(mf>0){eL.push('Mutual Funds');eV.push(mf);eC.push('#EF9F27')}
     if(eL.length>0){
-      if(eqChart) { eqChart.destroy(); eqChart = null; }
-      eqChart=new Chart(eqCtx,{type:'doughnut',data:{labels:eL,datasets:[{data:eV,backgroundColor:eC,borderWidth:0}]},
+      eqChart=new Chart(eqCtx.getContext('2d'),{type:'doughnut',data:{labels:eL,datasets:[{data:eV,backgroundColor:eC,borderWidth:0}]},
         options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},cutout:'60%'}});
       const et=eV.reduce((a,b)=>a+b,0);
       if(legEq) legEq.innerHTML=eL.map((l,i)=>'<span class="legend-item"><span class="legend-dot" style="background:'+eC[i]+'"></span>'+l+' '+(et>0?(eV[i]/et*100).toFixed(1):0)+'%</span>').join('');
@@ -1109,14 +1133,13 @@ function renderAllocation() {
   }
 
   // Allocation chart — always uses % on Y-axis, never shows rupee amounts
-  const allocCtx=freshCanvas('chart-alloc'), legAlloc=document.getElementById('legend-alloc');
+  allocChart=destroyChart(allocChart,'chart-alloc'); const allocCtx=document.getElementById('chart-alloc'), legAlloc=document.getElementById('legend-alloc');
   if(allocCtx&&total>0){
     const aData=[
       {l:'Equity',v:equity,c:'#1D9E75'},{l:'Debt',v:debt,c:'#EF9F27'},{l:'Fixed',v:fixed,c:'#E24B4A'},
       {l:'Liquid',v:liquid,c:'#378ADD'},{l:'Gold',v:gold,c:'#BA7517'},{l:'Real Estate',v:re,c:'#5DCAA5'},{l:'Crypto',v:crypto,c:'#7F77DD'}
     ].filter(d=>d.v>0).map(d=>({...d, pct: parseFloat((d.v/total*100).toFixed(1))}));
-    if(allocChart) { allocChart.destroy(); allocChart = null; }
-    allocChart=new Chart(allocCtx,{type:'bar',
+    allocChart=new Chart(allocCtx.getContext('2d'),{type:'bar',
       data:{labels:aData.map(d=>d.l), datasets:[{data:aData.map(d=>d.pct), backgroundColor:aData.map(d=>d.c), borderRadius:6, borderSkipped:false}]},
       options:{responsive:true, maintainAspectRatio:false,
         plugins:{legend:{display:false}, tooltip:{callbacks:{label:function(ctx){ return ctx.parsed.y + '% of portfolio'; }}}},
