@@ -312,15 +312,6 @@ async function onLogin(user) {
   document.getElementById('tx-date').value  = new Date().toISOString().slice(0,10);
   document.getElementById('inv-date').value = new Date().toISOString().slice(0,10);
   document.getElementById('share-link').value = window.location.href;
-
-  // show AI insights nav for owners only
-  const navInsights = document.getElementById('nav-insights');
-  if (navInsights) navInsights.style.display = isOwner() ? 'block' : 'none';
-
-  // restore saved API key
-  const ak = localStorage.getItem('fintrack_apikey');
-  if (ak) { const el = document.getElementById('api-key'); if (el) el.value = ak; }
-
   await loadData();
   setTimeout(applyThemeToBtn, 50);
 }
@@ -1276,97 +1267,6 @@ async function renderFamilyPage() {
       <span class="member-role role-member">${p.role||'member'}</span>
     </div>`;
   }).join('');
-}
-
-// ══════════════════════════════════════════════════════════
-//  AI INSIGHTS (owner only)
-// ══════════════════════════════════════════════════════════
-
-function saveApiKey() {
-  const k = document.getElementById('api-key')?.value?.trim();
-  if (k) { localStorage.setItem('fintrack_apikey', k); toast('API key saved!'); }
-}
-
-function buildContext() {
-  const inc = txCache.filter(t=>t.type==='income').reduce((s,t)=>s+Number(t.amount),0);
-  const exp = txCache.filter(t=>t.type==='expense').reduce((s,t)=>s+Number(t.amount),0);
-  const sav = txCache.filter(t=>t.type==='saving').reduce((s,t)=>s+Number(t.amount),0);
-  const byType = {};
-  invCache.forEach(i => { byType[i.asset_type] = (byType[i.asset_type]||0) + Number(i.current_value); });
-  const catSpend = {};
-  txCache.filter(t=>t.type==='expense').forEach(t => { catSpend[t.category] = (catSpend[t.category]||0) + Number(t.amount); });
-  const totalV = invCache.reduce((s,i)=>s+Number(i.current_value),0);
-  const totalA = invCache.reduce((s,i)=>s+Number(i.amount_invested),0);
-  const earnings   = salaryCache.components.filter(c=>c.kind==='earning').reduce((s,c)=>s+Number(c.amount_monthly),0);
-  const deductions = salaryCache.components.filter(c=>c.kind==='deduction').reduce((s,c)=>s+Number(c.amount_monthly),0);
-  return `Indian investor financial data:
-Income: ₹${inc.toLocaleString('en-IN')}, Expenses: ₹${exp.toLocaleString('en-IN')}, Savings: ₹${sav.toLocaleString('en-IN')}
-Savings rate: ${inc>0?((inc-exp)/inc*100).toFixed(1):0}%
-Monthly salary: Gross ₹${earnings.toLocaleString('en-IN')}, Deductions ₹${deductions.toLocaleString('en-IN')}, Net ₹${(earnings-deductions).toLocaleString('en-IN')}
-Portfolio invested: ₹${totalA.toLocaleString('en-IN')}, Current: ₹${totalV.toLocaleString('en-IN')}, P&L: ₹${(totalV-totalA).toLocaleString('en-IN')}
-Asset breakdown: ${JSON.stringify(Object.fromEntries(Object.entries(byType).map(([k,v])=>[k,Math.round(v)])))}
-Holdings: ${invCache.map(i=>`${i.name}(${TYPE_LABELS[i.asset_type]||i.asset_type}):₹${Math.round(i.current_value).toLocaleString('en-IN')}`).join(', ')}
-Top expenses: ${JSON.stringify(Object.fromEntries(Object.entries(catSpend).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([k,v])=>[k,Math.round(v)])))}`;
-}
-
-async function callClaude(prompt, maxTokens=1000) {
-  const apiKey = localStorage.getItem('fintrack_apikey');
-  const el = document.getElementById('api-key');
-  const key = el?.value?.trim() || apiKey;
-  if (!key || !key.startsWith('sk-')) return 'Please enter your Anthropic API key above.';
-  const resp = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: { 'Content-Type':'application/json', 'x-api-key':key, 'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
-    body: JSON.stringify({ model:'claude-sonnet-4-20250514', max_tokens:maxTokens, messages:[{ role:'user', content:prompt }] })
-  });
-  if (!resp.ok) { const e = await resp.json().catch(()=>({})); throw new Error(e.error?.message || `API error ${resp.status}`); }
-  const d = await resp.json();
-  return d.content?.[0]?.text || 'No response.';
-}
-
-async function runAnalysis() {
-  if (!isOwner()) { toast('AI insights are available for owners only'); return; }
-  const el  = document.getElementById('ai-output');
-  const btn = document.getElementById('analyse-btn');
-  el.style.color = 'var(--txt3)'; el.style.fontStyle = 'italic';
-  el.textContent = 'Analysing your portfolio…';
-  if (btn) { btn.innerHTML = '<span class="spinner"></span>Analysing…'; btn.disabled = true; }
-  try {
-    const text = await callClaude(`You are a senior personal financial advisor for an Indian investor. Analyse this data and provide a comprehensive assessment.\n\n${buildContext()}\n\nProvide:\n1. Overall financial health score (out of 10)\n2. Key strengths (2–3 points)\n3. Key risks / concerns (2–3 points)\n4. Specific actionable recommendations (4–5 steps)\n5. Portfolio rebalancing suggestions\n6. Tax optimisation tips (80C, 80D, LTCG, ELSS, NPS)\n\nBe specific with numbers. Use Indian financial context.`, 1200);
-    el.style.color = ''; el.style.fontStyle = '';
-    el.textContent = text;
-  } catch(e) {
-    el.style.color = 'var(--red)'; el.style.fontStyle = '';
-    el.textContent = 'Error: ' + e.message;
-  }
-  if (btn) { btn.innerHTML = 'Analyse now'; btn.disabled = false; }
-}
-
-async function askQuestion() {
-  if (!isOwner()) { toast('AI insights are available for owners only'); return; }
-  const q   = document.getElementById('ai-q')?.value?.trim();
-  const el  = document.getElementById('ai-answer');
-  const btn = document.getElementById('ask-btn');
-  if (!q) { toast('Type a question first'); return; }
-  el.style.display = 'block';
-  el.style.color   = 'var(--txt3)'; el.style.fontStyle = 'italic';
-  el.textContent   = 'Thinking…';
-  if (btn) { btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true; }
-  try {
-    const text = await callClaude(`Personal finance advisor for Indian investor. Answer concisely.\n\n${buildContext()}\n\nQuestion: ${q}`, 600);
-    el.style.color = ''; el.style.fontStyle = '';
-    el.textContent = text;
-  } catch(e) {
-    el.style.color = 'var(--red)'; el.style.fontStyle = '';
-    el.textContent = 'Error: ' + e.message;
-  }
-  if (btn) { btn.innerHTML = 'Ask'; btn.disabled = false; }
-}
-
-function quickAsk(q) {
-  const el = document.getElementById('ai-q');
-  if (el) el.value = q;
-  askQuestion();
 }
 
 // ══════════════════════════════════════════════════════════
