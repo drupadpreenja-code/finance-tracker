@@ -109,6 +109,7 @@ async function onLogin(user) {
   document.getElementById('share-link').value = window.location.href;
   await loadData();
   setTimeout(applyThemeToBtn, 50);
+  setTimeout(function(){ if(typeof initCalculators==='function') initCalculators(); }, 200);
 }
 
 // ── MFA VERIFY (login gate) ──

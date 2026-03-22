@@ -145,6 +145,7 @@
     <button class="nav-btn" onclick="showPage('investments',this)">Investments</button>
     <button class="nav-btn" onclick="showPage('allocation',this)">Allocation</button>
     <button class="nav-btn" onclick="showPage('family',this)">Family</button>
+    <button class="nav-btn" onclick="showPage('calculators',this)">🧮 Calculators</button>
   </nav>
 
   <!-- MOBILE BOTTOM NAV -->
@@ -169,6 +170,10 @@
       <button class="bottom-nav-btn" id="bnav-family" onclick="showPageMobile('family',this)">
         <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
         Family
+      </button>
+      <button class="bottom-nav-btn" id="bnav-calculators" onclick="showPageMobile('calculators',this)">
+        <svg viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="6" x2="16" y2="6"/><line x1="8" y1="10" x2="10" y2="10"/><line x1="14" y1="10" x2="16" y2="10"/><line x1="8" y1="14" x2="10" y2="14"/><line x1="14" y1="14" x2="16" y2="14"/><line x1="8" y1="18" x2="10" y2="18"/><line x1="14" y1="18" x2="16" y2="18"/></svg>
+        Calc
       </button>
     </div>
   </nav>
@@ -460,8 +465,170 @@
       </div>
     </section>
 
-  </main>
-</div><!-- end app-screen -->
+
+    <!-- CALCULATORS -->
+    <section id="page-calculators" class="page">
+      <div class="calc-page">
+
+        <!-- SCORE CARD -->
+        <div class="calc-score-banner" id="calc-score-banner">
+          <div class="calc-score-left">
+            <div class="calc-score-label">Financial Health Score</div>
+            <div class="calc-score-value" id="score-value">—</div>
+            <div class="calc-score-tag" id="score-tag">Calculate below</div>
+          </div>
+          <div class="calc-score-ring-wrap">
+            <svg class="calc-score-ring" viewBox="0 0 120 120">
+              <circle cx="60" cy="60" r="50" fill="none" stroke="rgba(255,255,255,.15)" stroke-width="10"/>
+              <circle id="score-arc" cx="60" cy="60" r="50" fill="none" stroke="#fff" stroke-width="10"
+                stroke-dasharray="314" stroke-dashoffset="314" stroke-linecap="round"
+                transform="rotate(-90 60 60)" style="transition:stroke-dashoffset .8s ease"/>
+            </svg>
+            <div class="calc-score-pct" id="score-pct">0</div>
+          </div>
+        </div>
+
+        <!-- CALC TABS -->
+        <div class="calc-tabs" id="calc-tabs">
+          <button class="calc-tab active" onclick="switchCalc('sip',this)">📈 SIP</button>
+          <button class="calc-tab" onclick="switchCalc('goal',this)">🎯 Goal</button>
+          <button class="calc-tab" onclick="switchCalc('retirement',this)">🧠 Retire</button>
+          <button class="calc-tab" onclick="switchCalc('emi',this)">💰 EMI vs Invest</button>
+          <button class="calc-tab" onclick="switchCalc('drawdown',this)">📉 Drawdown</button>
+          <button class="calc-tab" onclick="switchCalc('cagr',this)">📊 CAGR</button>
+          <button class="calc-tab" onclick="switchCalc('networth',this)">🪙 Net Worth</button>
+          <button class="calc-tab" onclick="switchCalc('rebalance',this)">🔁 Rebalance</button>
+          <button class="calc-tab" onclick="switchCalc('milestone',this)">📈 Milestone</button>
+          <button class="calc-tab" onclick="switchCalc('score',this)">📊 Score</button>
+        </div>
+
+        <!-- ── SIP CALCULATOR ── -->
+        <div class="calc-panel active" id="calc-sip">
+          <div class="calc-panel-header">📈 SIP Growth Calculator</div>
+          <div class="calc-grid">
+            <div class="calc-field"><label>Monthly SIP (₹)</label><input type="number" id="sip-amount" value="10000" min="100" oninput="calcSIP()"></div>
+            <div class="calc-field"><label>Expected Return (%/yr)</label><input type="number" id="sip-rate" value="12" min="1" max="50" step="0.1" oninput="calcSIP()"></div>
+            <div class="calc-field"><label>Duration (years)</label><input type="number" id="sip-years" value="10" min="1" max="50" oninput="calcSIP()"></div>
+          </div>
+          <label class="calc-toggle-row">
+            <input type="checkbox" id="sip-stepup" onchange="calcSIP()">
+            <span>Step-up SIP by 10% every year</span>
+          </label>
+          <div class="calc-result" id="sip-result"></div>
+          <canvas id="chart-sip" height="200"></canvas>
+        </div>
+
+        <!-- ── GOAL CALCULATOR ── -->
+        <div class="calc-panel" id="calc-goal">
+          <div class="calc-panel-header">🎯 Goal / Target Calculator</div>
+          <div class="calc-grid">
+            <div class="calc-field"><label>Target Amount (₹)</label><input type="number" id="goal-target" value="10000000" oninput="calcGoal()"></div>
+            <div class="calc-field"><label>Time (years)</label><input type="number" id="goal-years" value="15" min="1" max="50" oninput="calcGoal()"></div>
+            <div class="calc-field"><label>Expected Return (%/yr)</label><input type="number" id="goal-rate" value="12" min="1" max="50" step="0.1" oninput="calcGoal()"></div>
+          </div>
+          <div class="calc-result" id="goal-result"></div>
+          <canvas id="chart-goal" height="200"></canvas>
+        </div>
+
+        <!-- ── RETIREMENT CALCULATOR ── -->
+        <div class="calc-panel" id="calc-retirement">
+          <div class="calc-panel-header">🧠 Retirement Corpus Calculator</div>
+          <div class="calc-grid">
+            <div class="calc-field"><label>Current Monthly Expenses (₹)</label><input type="number" id="ret-expenses" value="50000" oninput="calcRetirement()"></div>
+            <div class="calc-field"><label>Years to Retire</label><input type="number" id="ret-years" value="25" min="1" max="50" oninput="calcRetirement()"></div>
+            <div class="calc-field"><label>Inflation Rate (%)</label><input type="number" id="ret-inflation" value="6" min="1" max="20" step="0.1" oninput="calcRetirement()"></div>
+            <div class="calc-field"><label>Post-Retirement Return (%)</label><input type="number" id="ret-return" value="8" min="1" max="20" step="0.1" oninput="calcRetirement()"></div>
+            <div class="calc-field"><label>Retirement Duration (years)</label><input type="number" id="ret-duration" value="25" min="5" max="50" oninput="calcRetirement()"></div>
+          </div>
+          <div class="calc-result" id="ret-result"></div>
+        </div>
+
+        <!-- ── EMI vs INVEST ── -->
+        <div class="calc-panel" id="calc-emi">
+          <div class="calc-panel-header">💰 Prepay Loan vs Invest</div>
+          <div class="calc-grid">
+            <div class="calc-field"><label>Loan Amount (₹)</label><input type="number" id="emi-loan" value="2000000" oninput="calcEMI()"></div>
+            <div class="calc-field"><label>Loan Interest Rate (%)</label><input type="number" id="emi-rate" value="8.5" step="0.1" oninput="calcEMI()"></div>
+            <div class="calc-field"><label>Loan Tenure (years)</label><input type="number" id="emi-tenure" value="20" min="1" max="30" oninput="calcEMI()"></div>
+            <div class="calc-field"><label>Investment Return (%)</label><input type="number" id="emi-invest-rate" value="12" step="0.1" oninput="calcEMI()"></div>
+            <div class="calc-field"><label>Extra Amount/mo (₹)</label><input type="number" id="emi-extra" value="10000" oninput="calcEMI()"></div>
+          </div>
+          <div class="calc-result" id="emi-result"></div>
+        </div>
+
+        <!-- ── DRAWDOWN ── -->
+        <div class="calc-panel" id="calc-drawdown">
+          <div class="calc-panel-header">📉 Drawdown & Recovery Calculator</div>
+          <div class="calc-grid">
+            <div class="calc-field"><label>Portfolio Drop (%)</label><input type="number" id="dd-drop" value="20" min="1" max="99" oninput="calcDrawdown()"></div>
+            <div class="calc-field"><label>Recovery Return (%/yr)</label><input type="number" id="dd-recovery-rate" value="12" step="0.1" oninput="calcDrawdown()"></div>
+          </div>
+          <div class="calc-result" id="dd-result"></div>
+          <canvas id="chart-dd" height="180"></canvas>
+        </div>
+
+        <!-- ── CAGR CALCULATOR ── -->
+        <div class="calc-panel" id="calc-cagr">
+          <div class="calc-panel-header">📊 CAGR Calculator</div>
+          <div class="calc-grid">
+            <div class="calc-field"><label>Initial Value (₹)</label><input type="number" id="cagr-initial" value="100000" oninput="calcCAGR()"></div>
+            <div class="calc-field"><label>Final Value (₹)</label><input type="number" id="cagr-final" value="250000" oninput="calcCAGR()"></div>
+            <div class="calc-field"><label>Duration (years)</label><input type="number" id="cagr-years" value="5" min="1" oninput="calcCAGR()"></div>
+          </div>
+          <div class="calc-result" id="cagr-result"></div>
+          <div class="calc-panel-header" style="margin-top:24px;font-size:13px">Or calculate final value from CAGR</div>
+          <div class="calc-grid">
+            <div class="calc-field"><label>Initial (₹)</label><input type="number" id="cagr2-initial" value="100000" oninput="calcCAGR2()"></div>
+            <div class="calc-field"><label>CAGR (%)</label><input type="number" id="cagr2-rate" value="15" step="0.1" oninput="calcCAGR2()"></div>
+            <div class="calc-field"><label>Years</label><input type="number" id="cagr2-years" value="10" min="1" oninput="calcCAGR2()"></div>
+          </div>
+          <div class="calc-result" id="cagr2-result"></div>
+        </div>
+
+        <!-- ── NET WORTH PROJECTION ── -->
+        <div class="calc-panel" id="calc-networth">
+          <div class="calc-panel-header">🪙 Net Worth Projection</div>
+          <div class="calc-grid">
+            <div class="calc-field"><label>Current Net Worth (₹)</label><input type="number" id="nwp-current" value="500000" oninput="calcNetworth()"></div>
+            <div class="calc-field"><label>Monthly Investment (₹)</label><input type="number" id="nwp-monthly" value="20000" oninput="calcNetworth()"></div>
+            <div class="calc-field"><label>Expected Return (%/yr)</label><input type="number" id="nwp-rate" value="12" step="0.1" oninput="calcNetworth()"></div>
+            <div class="calc-field"><label>Project for (years)</label><input type="number" id="nwp-years" value="20" min="1" max="50" oninput="calcNetworth()"></div>
+          </div>
+          <div class="calc-result" id="nwp-result"></div>
+          <canvas id="chart-nwp" height="220"></canvas>
+        </div>
+
+        <!-- ── REBALANCE ── -->
+        <div class="calc-panel" id="calc-rebalance">
+          <div class="calc-panel-header">🔁 Portfolio Rebalancer</div>
+          <p style="font-size:13px;color:var(--txt2);margin-bottom:16px">Current allocation is auto-filled from your portfolio. Set your target allocation below.</p>
+          <div id="rebalance-body"></div>
+          <div class="calc-result" id="rebalance-result"></div>
+        </div>
+
+        <!-- ── MILESTONE ── -->
+        <div class="calc-panel" id="calc-milestone">
+          <div class="calc-panel-header">📈 When Will I Hit My Goal?</div>
+          <div class="calc-grid">
+            <div class="calc-field"><label>Current Portfolio (₹)</label><input type="number" id="ms-current" value="500000" oninput="calcMilestone()"></div>
+            <div class="calc-field"><label>Monthly SIP (₹)</label><input type="number" id="ms-sip" value="20000" oninput="calcMilestone()"></div>
+            <div class="calc-field"><label>Expected Return (%/yr)</label><input type="number" id="ms-rate" value="12" step="0.1" oninput="calcMilestone()"></div>
+          </div>
+          <div class="calc-result" id="ms-result"></div>
+        </div>
+
+        <!-- ── SCORE ── -->
+        <div class="calc-panel" id="calc-score">
+          <div class="calc-panel-header">📊 Financial Health Score</div>
+          <p style="font-size:13px;color:var(--txt2);margin-bottom:16px">Score calculated from your actual data — savings rate, asset allocation, portfolio growth and emergency fund.</p>
+          <div id="score-breakdown"></div>
+          <div class="calc-result" id="score-result"></div>
+        </div>
+
+      </div>
+    </section>
+
+
 
 <script src="config.js"></script>
 <!-- App modules — load order matters: state → ui → charts → investments → data → render → auth -->
@@ -472,5 +639,6 @@
 <script src="data.js"></script>
 <script src="render.js"></script>
 <script src="auth.js"></script>
+<script src="calculators.js"></script>
 </body>
 </html>

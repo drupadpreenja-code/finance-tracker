@@ -59,7 +59,7 @@ function showPageMobile(id, btn) {
 }
 
 function syncBottomNav(id) {
-  var map = { dashboard:'bnav-dashboard', transactions:'bnav-transactions', investments:'bnav-investments', salary:'bnav-salary', family:'bnav-family' };
+  var map = { dashboard:'bnav-dashboard', transactions:'bnav-transactions', investments:'bnav-investments', salary:'bnav-salary', family:'bnav-family', calculators:'bnav-calculators' };
   document.querySelectorAll('.bottom-nav-btn').forEach(function(b){ b.classList.remove('active'); });
   if (map[id]) { var el = document.getElementById(map[id]); if (el) el.classList.add('active'); }
 }

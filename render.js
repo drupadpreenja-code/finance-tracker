@@ -11,6 +11,9 @@ function renderAll() {
   renderAllocation();
   renderSalary();
   renderFamilyPage();
+  // Refresh score banner if calculators panel is visible
+  var calcPage = document.getElementById('page-calculators');
+  if (calcPage && calcPage.classList.contains('active')) calcScore();
 }
 
 function filteredTx() {
