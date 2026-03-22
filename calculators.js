@@ -51,6 +51,35 @@ function destroyCalcChart(chart, id) {
   return null;
 }
 
+// ── SHARED FAST CHART CONFIG ──
+// All monetary data is pre-scaled (to L or Cr) before passing to Chart.js.
+// This avoids Chart.js iterating over huge numbers for tick generation.
+function scaleArr(arr) {
+  var mx = Math.max.apply(null, arr.map(function(v){ return Math.abs(v); }));
+  if (mx >= 1e7) return { data: arr.map(function(v){ return parseFloat((v/1e7).toFixed(3)); }), unit:'Cr' };
+  return { data: arr.map(function(v){ return parseFloat((v/1e5).toFixed(2)); }), unit:'L' };
+}
+function fastChartOpts(unit, extraOpts) {
+  var base = {
+    animation: false,
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { labels: { boxWidth: 10, font: { size: 11 } } }
+    },
+    scales: {
+      x: { grid: { display: false }, ticks: { maxTicksLimit: 10, font: { size: 10 } } },
+      y: { grid: { color: 'rgba(0,0,0,0.04)' }, ticks: { maxTicksLimit: 6, font: { size: 10 },
+        callback: function(v){ return '\u20b9' + v + unit; }
+      }}
+    }
+  };
+  if (extraOpts) {
+    if (extraOpts.tooltip) base.plugins.tooltip = extraOpts.tooltip;
+  }
+  return base;
+}
+
 // ══════════════════════════════════════════════════════════
 //  1. SIP GROWTH CALCULATOR
 // ══════════════════════════════════════════════════════════
@@ -86,17 +115,20 @@ function calcSIP() {
 
   chartSIP = destroyCalcChart(chartSIP, 'chart-sip');
   var el = document.getElementById('chart-sip');
-  if (el) chartSIP = new Chart(el.getContext('2d'), {
-    type: 'bar',
-    data: { labels: labels, datasets: [
-      { label:'Invested', data: investedArr, backgroundColor: '#185FA555', borderColor:'#185FA5', borderWidth:1 },
-      { label:'Value',    data: valueArr,    backgroundColor: '#1D9E7555', borderColor:'#1D9E75', borderWidth:1 }
-    ]},
-    options: { responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{ labels:{ boxWidth:12, font:{ size:11 } } } },
-      scales:{ x:{ grid:{display:false} }, y:{ ticks:{ callback: function(v){ return v>=1e7?'\u20b9'+(v/1e7).toFixed(1)+'Cr':v>=1e5?'\u20b9'+(v/1e5).toFixed(0)+'L':'\u20b9'+v; } } } }
-    }
-  });
+  if (el) {
+    var si = scaleArr(investedArr), sv = scaleArr(valueArr);
+    var unit = sv.unit;
+    var opts = fastChartOpts(unit);
+    opts.plugins.tooltip = { callbacks: { label: function(ctx){ return ctx.dataset.label + ': \u20b9' + ctx.parsed.y + unit; } } };
+    chartSIP = new Chart(el.getContext('2d'), {
+      type: 'bar',
+      data: { labels: labels, datasets: [
+        { label:'Invested', data: si.data, backgroundColor:'#185FA555', borderColor:'#185FA5', borderWidth:1, borderRadius:3 },
+        { label:'Value',    data: sv.data, backgroundColor:'#1D9E7555', borderColor:'#1D9E75', borderWidth:1, borderRadius:3 }
+      ]},
+      options: opts
+    });
+  }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -130,17 +162,20 @@ function calcGoal() {
 
   chartGoal = destroyCalcChart(chartGoal, 'chart-goal');
   var el = document.getElementById('chart-goal');
-  if (el) chartGoal = new Chart(el.getContext('2d'), {
-    type:'bar',
-    data:{ labels:labels, datasets:[
-      { label:'Invested', data:investedArr, backgroundColor:'#185FA555', borderColor:'#185FA5', borderWidth:1 },
-      { label:'Value',    data:valueArr,    backgroundColor:'#1D9E7555', borderColor:'#1D9E75', borderWidth:1 }
-    ]},
-    options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{ labels:{ boxWidth:12, font:{size:11} } } },
-      scales:{ x:{grid:{display:false}}, y:{ ticks:{ callback:function(v){ return v>=1e7?'\u20b9'+(v/1e7).toFixed(1)+'Cr':v>=1e5?'\u20b9'+(v/1e5).toFixed(0)+'L':'\u20b9'+v; } } } }
-    }
-  });
+  if (el) {
+    var gi = scaleArr(investedArr), gv = scaleArr(valueArr);
+    var unit = gv.unit;
+    var opts = fastChartOpts(unit);
+    opts.plugins.tooltip = { callbacks: { label: function(ctx){ return ctx.dataset.label + ': \u20b9' + ctx.parsed.y + unit; } } };
+    chartGoal = new Chart(el.getContext('2d'), {
+      type:'bar',
+      data:{ labels:labels, datasets:[
+        { label:'Invested', data:gi.data, backgroundColor:'#185FA555', borderColor:'#185FA5', borderWidth:1, borderRadius:3 },
+        { label:'Value',    data:gv.data, backgroundColor:'#1D9E7555', borderColor:'#1D9E75', borderWidth:1, borderRadius:3 }
+      ]},
+      options: opts
+    });
+  }
 }
 
 // ══════════════════════════════════════════════════════════
@@ -260,9 +295,9 @@ function calcDrawdown() {
     data:{ labels:scenarios.map(function(s){ return '-'+s.drop+'%'; }),
       datasets:[{ label:'Recovery needed %', data:scenarios.map(function(s){ return parseFloat(s.recovery); }), backgroundColor:'#E24B4A88', borderColor:'#E24B4A', borderWidth:1, borderRadius:4 }]
     },
-    options:{ responsive:true, maintainAspectRatio:false,
+    options:{ animation:false, responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{display:false} },
-      scales:{ x:{grid:{display:false}}, y:{ ticks:{ callback:function(v){ return v+'%'; } } } }
+      scales:{ x:{grid:{display:false}, ticks:{font:{size:10}}}, y:{ ticks:{ maxTicksLimit:6, callback:function(v){ return v+'%'; }, font:{size:10} } } }
     }
   });
 }
@@ -345,17 +380,20 @@ function calcNetworth() {
 
   chartNWP = destroyCalcChart(chartNWP, 'chart-nwp');
   var el = document.getElementById('chart-nwp');
-  if (el) chartNWP = new Chart(el.getContext('2d'), {
-    type:'line',
-    data:{ labels:labels, datasets:[
-      { label:'Net Worth', data:vals, borderColor:'#1D9E75', backgroundColor:'rgba(29,158,117,.1)', fill:true, tension:.35, pointRadius:3 },
-      { label:'Invested',  data:inv,  borderColor:'#185FA5', backgroundColor:'rgba(24,95,165,.05)', fill:true, tension:.35, pointRadius:0, borderDash:[4,4] }
-    ]},
-    options:{ responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{ labels:{ boxWidth:12, font:{size:11} } } },
-      scales:{ x:{grid:{display:false}}, y:{ ticks:{ callback:function(v){ return v>=1e7?'\u20b9'+(v/1e7).toFixed(1)+'Cr':v>=1e5?'\u20b9'+(v/1e5).toFixed(0)+'L':'\u20b9'+v; } } } }
-    }
-  });
+  if (el) {
+    var nv = scaleArr(vals), ni = scaleArr(inv);
+    var unit = nv.unit;
+    var opts = fastChartOpts(unit);
+    opts.plugins.tooltip = { callbacks: { label: function(ctx){ return ctx.dataset.label + ': \u20b9' + ctx.parsed.y + unit; } } };
+    chartNWP = new Chart(el.getContext('2d'), {
+      type:'line',
+      data:{ labels:labels, datasets:[
+        { label:'Net Worth', data:nv.data, borderColor:'#1D9E75', backgroundColor:'rgba(29,158,117,.1)', fill:true, tension:.3, pointRadius:0, borderWidth:2 },
+        { label:'Invested',  data:ni.data, borderColor:'#185FA5', backgroundColor:'rgba(24,95,165,.05)', fill:true, tension:.3, pointRadius:0, borderWidth:1.5, borderDash:[5,3] }
+      ]},
+      options: opts
+    });
+  }
 }
 
 // ══════════════════════════════════════════════════════════
